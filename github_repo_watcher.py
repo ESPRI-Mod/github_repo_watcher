@@ -1,22 +1,19 @@
 """
-prefect_github_repo_watcher_yaml.py
+prefect_github_repo_watcher_yaml_v2.py
 
-But :
- - Vérifier des dépôts GitHub sur une branche donnée (owner/repo@branch).
- - Conserver l'état observé (sha/date) dans un fichier YAML (pas de DB).
- - Charger des recommandations depuis un fichier YAML (templating simple).
- - Fournir un flow Prefect 3 prêt à être déployé/exécuté via Automation.
+- Reco only when change detected
+- Repo-level recommendations first, then branch-level
+- No noisy 'default' fallbacks when no change
+- Write a Markdown artifact for Prefect and optionally send Slack notifications
 
-Usage :
- - Définir GITHUB_TOKEN dans l'environnement si tu veux accéder aux dépôts privés ou éviter les limites.
- - Préparer un fichier de recommandations (voir example ci-dessous).
- - Appeler `github_repos_check_flow(repos=[...], ...)` depuis Prefect.
+Dépendances:
+  pip install prefect requests pyyaml
 """
 
 import os
 import json
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Any
 from pathlib import Path
 
 import requests
@@ -33,7 +30,7 @@ HTTP_TIMEOUT = 30
 
 
 # ---------------------------
-# Helpers : YAML state + config
+# YAML helpers
 # ---------------------------
 def read_yaml(path: Path) -> Any:
     if not path.exists():
@@ -49,108 +46,117 @@ def write_yaml(path: Path, obj: Any):
 
 
 # ---------------------------
-# Config format (recommendations)
+# Recommendation config helpers
 # ---------------------------
-# Exemple minimal de recommendations.yml :
-# globals:
-#   - "A vérifier : nouvelle commit sur {repo}@{branch} ({sha[:8]}) à {date}."
-# repos:
-#   "ipsl/climatsuds":
-#     default:
-#       - "Run deploy script: ./deploy.sh {repo} {branch}"
-#     branches:
-#       "main":
-#         - "Attention: main déclenche déploiement. Vérifier staging d'abord."
-#   ".*":   # pattern regex match (fallback)
-#     default:
-#       - "Run tests, rebuild image, redeploy if needed."
-#
-# Les chaînes supportent les placeholders : {repo}, {owner}, {repo_name}, {branch}, {sha}, {date}
-
 def load_recommendations_conf(path: Path) -> Dict:
     conf = read_yaml(path) or {}
-    # normalize structure
     return {
         "globals": conf.get("globals", []),
         "repos": conf.get("repos", {}),
     }
 
 
-def match_repo_rules(conf_repos: Dict, owner: str, repo_name: str, branch: str) -> List[str]:
+def branch_matches(candidate_key: str, branch: str) -> bool:
     """
-    Récupère les règles applicables : priorité
-    1) exact owner/repo + branch override
-    2) exact owner/repo default
-    3) regex patterns in keys (applied in insertion order)
-    4) global default rules in conf_repos.get('*') or conf_repos.get('.*')
+    branch matching tolerant:
+      - exact match
+      - lowercase match
+      - '-' <-> '_' substitution
     """
-    import re
+    if candidate_key == branch:
+        return True
+    if candidate_key.lower() == branch.lower():
+        return True
+    if candidate_key.replace("-", "_") == branch:
+        return True
+    if candidate_key.replace("_", "-") == branch:
+        return True
+    return False
 
+
+def collect_repo_and_branch_rules(conf_repos: Dict, owner: str, repo_name: str, branch: str) -> List[str]:
+    """
+    Return ordered list: first repo default rules (if any), then branch-specific rules (if any).
+    Do NOT include regex/global fallbacks automatically to avoid noisy defaults.
+    If no repo-specific rules are present, we return [] (caller may use globals as fallback).
+    """
+    full = f"{owner}/{repo_name}"
     selected: List[str] = []
 
-    full = f"{owner}/{repo_name}"
-
-    # 1) exact match
     repo_conf = conf_repos.get(full)
-    if repo_conf:
-        # branch-specific
-        branches = repo_conf.get("branches", {})
-        if branch in branches:
-            selected.extend(branches[branch])
-        # default for that repo
-        selected.extend(repo_conf.get("default", []))
+    if not repo_conf:
+        # try regex keys that exactly match the repo (rare) but avoid '*' '.*' here
+        import re
 
-    # 2) regex keys & wildcard keys
-    for key, val in conf_repos.items():
-        if key == full:
-            continue
-        try:
-            # treat key as regex
-            if re.fullmatch(key, full):
-                selected.extend(val.get("default", []) if isinstance(val, dict) else ([] if val is None else val))
-                # branch override
-                if isinstance(val, dict):
-                    branches = val.get("branches", {})
-                    if branch in branches:
-                        selected.extend(branches[branch])
-        except re.error:
-            # ignore invalid regex keys
-            continue
+        for key, val in conf_repos.items():
+            if key in ("*", ".*"):
+                continue
+            if key == full:
+                repo_conf = val
+                break
+            try:
+                if re.fullmatch(key, full):
+                    repo_conf = val
+                    break
+            except re.error:
+                continue
 
-    # 3) fallback star keys
-    for star in ("*", ".*"):
-        if star in conf_repos:
-            v = conf_repos[star]
-            if isinstance(v, dict):
-                selected.extend(v.get("default", []))
-                if branch in v.get("branches", {}):
-                    selected.extend(v["branches"][branch])
-            else:
-                selected.extend(v if isinstance(v, list) else [v])
+    if not repo_conf:
+        return []
+
+    # repo default (if present)
+    if isinstance(repo_conf, dict):
+        repo_default = repo_conf.get("default", [])
+        if repo_default:
+            selected.extend(repo_default)
+
+        # branch-specific, but appended AFTER repo default (per request: repo > branche)
+        branches = repo_conf.get("branches", {}) or {}
+        # find matching branch keys with tolerant comparator
+        for candidate_key, candidate_val in branches.items():
+            if branch_matches(candidate_key, branch):
+                if isinstance(candidate_val, list):
+                    selected.extend(candidate_val)
+                elif candidate_val is None:
+                    continue
+                else:
+                    selected.append(candidate_val)
+                break  # stop on first matching branch key
+    else:
+        # repo_conf might be a list directly
+        if isinstance(repo_conf, list):
+            selected.extend(repo_conf)
+        elif repo_conf is None:
+            pass
+        else:
+            selected.append(str(repo_conf))
 
     return selected
 
 
 def render_templates(lines: List[str], context: Dict) -> List[str]:
     out = []
+    seen = set()
     for l in lines:
+        if not l:
+            continue  # skip empty lines from YAML
         try:
-            out.append(l.format_map(DefaultDict(context)))
+            rendered = l.format_map(DefaultDict(context))
         except Exception:
-            # en cas d'erreur de templating, renvoyer la ligne brute
-            out.append(l)
+            rendered = l
+        if rendered not in seen:
+            out.append(rendered)
+            seen.add(rendered)
     return out
 
 
 class DefaultDict(dict):
-    """dict qui retourne une chaîne vide pour les clés manquantes (utilisé pour format_map)."""
-
     def __missing__(self, key):
         return ""
 
 
 # ---------------------------
-# GitHub minimal helpers
+# GitHub helpers
 # ---------------------------
 def gh_get(url: str, params: Dict = None) -> requests.Response:
     r = requests.get(url, headers=HEADERS, params=params or {}, timeout=HTTP_TIMEOUT)
@@ -161,7 +167,8 @@ def gh_get(url: str, params: Dict = None) -> requests.Response:
 def get_default_branch(owner: str, repo: str) -> str:
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
     j = gh_get(url).json()
-    return j.get("default_branch", "main")
+    # use 'or "main"' for robustness if key exists but is falsy
+    return j.get("default_branch") or "main"
 
 
 def get_latest_commit_on_branch(owner: str, repo: str, branch: str) -> Dict:
@@ -173,18 +180,28 @@ def get_latest_commit_on_branch(owner: str, repo: str, branch: str) -> Dict:
 
 
 # ---------------------------
+# Notifications (Slack example)
+# ---------------------------
+def send_slack_message(webhook_url: str, text: str) -> bool:
+    if not webhook_url:
+        return False
+    payload = {"text": text}
+    try:
+        r = requests.post(webhook_url, json=payload, timeout=10)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------
 # Prefect tasks & flow
 # ---------------------------
-@task(retries=1, retry_delay_seconds=10)
+@task(retries=1, retry_delay_seconds=5)
 def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: str) -> Dict:
-    """
-    repo_with_branch: "owner/repo@branch" (branch optionnelle; si absente on récupère default branch)
-    state_path: chemin vers YAML d'état
-    reco_path: chemin vers YAML des recommandations
-    """
     logger = get_run_logger()
 
-    # parse input
+    # parse
     if "@" in repo_with_branch:
         repo_key, branch = repo_with_branch.split("@", 1)
     else:
@@ -194,16 +211,14 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         return {"repo": repo_with_branch, "error": "Format attendu owner/repo[@branch]"}
 
     owner, repo_name = repo_key.split("/", 1)
-
     logger.info(f"Checking {repo_key} (branch={branch or 'DEFAULT'})")
 
-    # load state and config
     state_file = Path(state_path)
     reco_file = Path(reco_path)
     state = read_yaml(state_file) or {}
     reco_conf = load_recommendations_conf(reco_file)
 
-    # determine branch if not provided
+    # branch fallback to default branch if not provided
     if not branch:
         try:
             branch = get_default_branch(owner, repo_name)
@@ -211,7 +226,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         except Exception as exc:
             return {"repo": repo_with_branch, "error": f"Failed to get default branch: {exc}"}
 
-    # fetch latest commit on that branch
+    # fetch latest commit
     try:
         latest = get_latest_commit_on_branch(owner, repo_name, branch)
     except Exception as exc:
@@ -220,31 +235,36 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     sha = latest.get("sha")
     date = latest.get("date")
 
-    # read recorded state for this repo+branch
-    # structure stored: state[repo_key][branch] = {"sha":..., "date":...}
-    recorded = state.get(repo_key, {}).get(branch)
+    # recorded state (robust)
+    repo_state = state.get(repo_key)
+    recorded = None
+    if isinstance(repo_state, dict):
+        recorded = repo_state.get(branch)
 
-    changed = (not recorded) or (sha and recorded.get("sha") != sha)
+    # determine change
+    recorded_sha = (recorded or {}).get("sha")
+    changed = (recorded is None) or (sha and recorded_sha != sha)
 
-    # Build recommendations
-    rec_lines = []
-
-    # global recommendations first
-    rec_lines.extend(reco_conf.get("globals", []))
-
-    # repo-specific rules
-    repo_rules = match_repo_rules(reco_conf.get("repos", {}), owner, repo_name, branch)
-    if repo_rules:
-        rec_lines.extend(repo_rules)
-
-    # always add a few auto-generated hints
+    # if changed: collect repo-level and branch-level recos only for this repo
+    rec_lines: List[str] = []
     if changed:
+        # collect repo+branch rules (repo default then branch)
+        repo_rules = collect_repo_and_branch_rules(reco_conf.get("repos", {}), owner, repo_name, branch)
+
+        if repo_rules:
+            rec_lines.extend(repo_rules)
+        else:
+            # if no repo-specific rules, use globals as fallback (optional)
+            rec_lines.extend(reco_conf.get("globals", []))
+
+        # auto hints appended last
         rec_lines.append("Auto: Detected change on {repo}@{branch}: {sha[:8]} at {date}.")
         rec_lines.append("Auto: Steps recommandés: pull, rebuild, run tests, check CI.")
     else:
-        rec_lines.append("Auto: Pas de nouvelle commit depuis la dernière vérification enregistrée.")
+        # no change -> do not include recommendations
+        logger.info(f"No change for {repo_key}@{branch}; skipping recommendations.")
 
-    # context for templating
+    # render templates (remove duplicates & empty)
     context = {
         "repo": repo_key,
         "owner": owner,
@@ -253,12 +273,15 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         "sha": sha or "",
         "date": date or "",
     }
-
     recommendations = render_templates(rec_lines, context)
 
-    # update state if changed (or if not recorded)
+    # update state only if changed (or if first time)
     if changed:
-        state.setdefault(repo_key, {})[branch] = {"sha": sha, "date": date, "checked_at": datetime.now(timezone.utc).isoformat()}
+        state.setdefault(repo_key, {})[branch] = {
+            "sha": sha,
+            "date": date,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
         write_yaml(state_file, state)
         logger.info(f"State updated for {repo_key}@{branch}: {sha[:8] if sha else 'None'}")
 
@@ -274,26 +297,102 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     return result
 
 
+@task
+def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts") -> str:
+    """Build a Markdown report and save it to artifacts/ with timestamp. Returns path."""
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    Path(artifacts_dir).mkdir(parents=True, exist_ok=True)
+    md_path = Path(artifacts_dir) / f"repo_check_{ts}.md"
+
+    lines = [f"# Repo check report — {ts}", ""]
+    changed_any = False
+    for r in results:
+        if r.get("error"):
+            lines.append(f"## {r['repo']} ({r.get('branch','')}) — ERROR")
+            lines.append(f"- {r['error']}")
+            lines.append("")
+            continue
+
+        status = "CHANGED" if r.get("changed") else "no change"
+        lines.append(f"## {r['repo']}@{r['branch']} — {status}")
+        lines.append(f"- sha: {r.get('sha')}")
+        lines.append(f"- date: {r.get('date')}")
+        recorded = r.get("recorded")
+        if recorded:
+            lines.append(f"- previously recorded sha: {recorded.get('sha')}")
+        if r.get("changed") and r.get("recommendations"):
+            changed_any = True
+            lines.append("")
+            lines.append("### Recommendations")
+            for rec in r["recommendations"]:
+                lines.append(f"- {rec}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append(f"Generated at {ts} UTC")
+
+    md_content = "\n".join(lines)
+    md_path.write_text(md_content, encoding="utf-8")
+    return str(md_path)
+
+
+@task(retries=0)
+def notify_on_changes_task(results: List[Dict], slack_webhook_env: str = "SLACK_WEBHOOK_URL") -> Dict:
+    """
+    If any result has changed==True, send a Slack notification (simple text).
+    Returns a dict summarizing notifications sent.
+    """
+    logger = get_run_logger()
+    webhook = os.environ.get(slack_webhook_env)
+    changed_items = [r for r in results if r.get("changed")]
+    summary = {"changed_count": len(changed_items), "sent": False}
+
+    if not changed_items:
+        logger.info("No changes detected — no notification sent.")
+        return summary
+
+    text_lines = ["GitHub Watcher — changes detected:"]
+    for r in changed_items:
+        repo = r["repo"]
+        branch = r["branch"]
+        sha = (r.get("sha") or "")[:8]
+        text_lines.append(f"- {repo}@{branch} — {sha}")
+
+    text_lines.append("")  # newline
+    text_lines.append("Voir le rapport généré dans les artifacts du run.")
+
+    text = "\n".join(text_lines)
+    if webhook:
+        ok = send_slack_message(webhook, text)
+        summary["sent"] = ok
+        logger.info(f"Slack notification sent: {ok}")
+    else:
+        logger.info("No SLACK_WEBHOOK_URL defined — skipping Slack notify. Summary:")
+        logger.info(text)
+
+    return summary
+
+
 @flow
 def github_repos_check_flow(
     repos: List[str],
     state_path: str = "repo_watcher_state.yml",
     reco_path: str = "repo_recommendations.yml",
     parallel: bool = True,
-) -> List[Dict]:
+    artifacts_dir: str = "artifacts",
+    notify_slack: bool = True,
+) -> Dict:
     """
-    Flow principal Prefect 3.
-    - repos: liste de "owner/repo@branch" (branch optionnelle -> utilisera default)
-    - state_path: fichier YAML qui enregistre les sha/dates observés
-    - reco_path: fichier YAML de recommandations
-    - parallel: si True, on lance les tâches en parallèle via task.submit()
+    Main Prefect 3 flow.
+    - repos: list of "owner/repo@branch"
+    - returns a dict with keys: results (list), report_path, notify_summary
     """
     logger = get_run_logger()
-    logger.info("Starting GitHub repos checker flow (YAML state + conf)")
-    results = []
+    logger.info("Starting GitHub repos checker flow (v2)")
 
+    # run checks
+    results = []
     if parallel:
-        # submit tasks concurrently
         futures = [check_single_repo_task.submit(r, state_path, reco_path) for r in repos]
         for f in futures:
             results.append(f.result())
@@ -301,49 +400,55 @@ def github_repos_check_flow(
         for r in repos:
             results.append(check_single_repo_task(r, state_path, reco_path))
 
-    logger.info("Flow terminé")
-    return results
+    # build + save report (artifact)
+    report_path = build_and_save_report(results, artifacts_dir=artifacts_dir)
+
+    notify_summary = {}
+    if notify_slack:
+        notify_summary = notify_on_changes_task(results)
+
+    # print/log summary for Prefect UI
+    changed = [r for r in results if r.get("changed")]
+    logger.info(f"Checked {len(results)} repos — changes: {len(changed)}")
+    logger.info(f"Report written to: {report_path}")
+
+    return {"results": results, "report_path": report_path, "notify": notify_summary}
 
 
 # ---------------------------
-# Example: fichier recommendations.yml exemple et usage
+# Example YAML & demo
 # ---------------------------
 EXAMPLE_REC_YAML = """
 globals:
   - "Note globale: vérifier les modules dépendants si interface modifiée."
 repos:
-  "ipsl/climatsuds":
+  alaupin-ipsl/WCRP-universe:
     default:
-      - "Si commit sur {repo}@{branch}, lancer: ./deploy_climatsuds.sh {branch}"
+      - "Le dépot Universe a été mis à jour."
     branches:
-      "main":
-        - "Main branch: vérifier les tests de non-régression avant déploiement."
-  ".*":
+      main:
+        - "Contactez Dan pour plus d'informations"
+      esgvoc-dev:
+        - "Contactez Laurent pour plus d'informations"
+  alaupin-ipsl/CORDEX-CMIP6_CVs:
     default:
-      - "Standard: pull -> build -> smoke-tests -> redeploy"
-"""
-
-EXAMPLE_STATE_YAML = """
-# Exemple de structure d'état :
-# ipsl/climatsuds:
-#   main:
-#     sha: "abcd1234..."
-#     date: "2025-08-19T12:34:56Z"
-#     checked_at: "2025-08-19T12:35:00+00:00"
+      - "Le dépôt des CVs de CORDEX-CMIP6 a été mis à jour"
+    branches:
+      main:
+        - "Vérifier integrity of CVs"
 """
 
 if __name__ == "__main__":
-    # Démo locale (ne pas oublier GITHUB_TOKEN si privé)
     demo_repos = [
-        "alaupin-ipsl/CORDEX-CMIP6_CVs",
-        "alaupin-ipsl/WCRP-universe@esgvoc_dev"
+        "alaupin-ipsl/CORDEX-CMIP6_CVs@main",
+        "alaupin-ipsl/WCRP-universe@esgvoc_dev",
     ]
-    # write example config if not exists
+
     rec_path = Path("repo_recommendations.yml")
     if not rec_path.exists():
         write_yaml(rec_path, yaml.safe_load(EXAMPLE_REC_YAML))
         print(f"Wrote example recommendations to {rec_path}")
 
     state_path = "repo_watcher_state.yml"
-    out = github_repos_check_flow(demo_repos, state_path=state_path, reco_path=str(rec_path), parallel=True)
+    out = github_repos_check_flow(demo_repos, state_path=state_path, reco_path=str(rec_path), parallel=True, notify_slack=False)
     print(json.dumps(out, indent=2, ensure_ascii=False))

@@ -1,20 +1,19 @@
 globals:
-- "Note globale: vérifier les modules dépendants si interface modifiée."
+  - "Note globale: vérifier les modules dépendants si l'interface a changé."
+  - "Exécuter les tests d'intégration et vérifier l'état des pipelines CI après un déploiement."
+
 repos:
   alaupin-ipsl/WCRP-universe:
-    default:
-    - "Le dépot Universe a été mis à jour."
     branches:
       main:
-      - "Contactez Dan pour plus d'informations"
+        - "Contactez Dan pour plus d'informations."
+        - "Vérifier que les scripts de génération ont été relancés sur les serveurs."
       esgvoc-dev:
-      - "Contactez Laurent pour plus d'informations"
+        - "Contactez Laurent pour plus d'informations."
+        - "Confirmer que les modifications sont bien mergées vers 'main' si nécessaire."
+
   alaupin-ipsl/CORDEX-CMIP6_CVs:
-    default:
-    - "Le dépôt des CVs de CORDEX-CMIP6 a été mis à jour"
     branches:
       main:
-      - ""
-  .*:
-    default:
-    - "Defaut"
+        - "Vérifier l'intégrité des CVs et la cohérence des métadonnées."
+        - "Mettre à jour le catalogue et reconstruire l'index si des champs ont changé."
