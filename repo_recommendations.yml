@@ -1,0 +1,20 @@
+globals:
+- "Note globale: vérifier les modules dépendants si interface modifiée."
+repos:
+  alaupin-ipsl/WCRP-universe:
+    default:
+    - "Le dépot Universe a été mis à jour."
+    branches:
+      main:
+      - "Contactez Dan pour plus d'informations"
+      esgvoc-dev:
+      - "Contactez Laurent pour plus d'informations"
+  alaupin-ipsl/CORDEX-CMIP6_CVs:
+    default:
+    - "Le dépôt des CVs de CORDEX-CMIP6 a été mis à jour"
+    branches:
+      main:
+      - ""
+  .*:
+    default:
+    - "Defaut"

@@ -1,0 +1,10 @@
+alaupin-ipsl/CORDEX-CMIP6_CVs:
+  main:
+    sha: ca3e4e5a79c74e4d36a0adc14fe2a077febaca4a
+    date: '2025-08-20T11:53:23Z'
+    checked_at: '2025-08-20T11:53:37.467358+00:00'
+alaupin-ipsl/WCRP-universe:
+  esgvoc_dev:
+    sha: 8cc5aa5a1c8f4ba9ac2aba07e19ab5acf73e7cfa
+    date: '2025-08-18T15:35:27Z'
+    checked_at: '2025-08-20T09:27:15.477304+00:00'
