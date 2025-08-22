@@ -1,16 +1,21 @@
 """
-prefect_github_repo_watcher_yaml_v2.py
+prefect_github_repo_watcher_full.py
 
-- Reco only when change detected
-- Repo-level recommendations first, then branch-level
-- No noisy 'default' fallbacks when no change
-- Write a Markdown artifact for Prefect and optionally send Slack notifications
+Fonctions:
+ - Vérifie une liste de repos GitHub (owner/repo[@branch])
+ - Conserve l'état dans un fichier YAML (sha, date, files_index)
+ - Utilise l'API compare pour détecter added/modified/removed/renamed files
+ - Classifie les changements en events: collection_created, term_created, term_modified, term_removed
+ - Applique des templates de recommandations définis dans repo_recommendations.yml
+ - Écrit un rapport Markdown dans artifacts/, renvoie le path dans le flow
+ - Optionnel: envoie une notification Slack si des changements ont été détectés
 
 Dépendances:
-  pip install prefect requests pyyaml
+ pip install prefect requests pyyaml
 """
 
 import os
+import re
 import json
 from datetime import datetime, timezone
 from typing import List, Dict, Any
@@ -19,7 +24,11 @@ from pathlib import Path
 import requests
 import yaml
 from prefect import flow, task, get_run_logger
+from prefect.artifacts import create_markdown_artifact
 
+# ---------------------------
+# Configuration
+# ---------------------------
 GITHUB_API_BASE = "https://api.github.com"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 HEADERS = {"Accept": "application/vnd.github+json"}
@@ -46,6 +55,30 @@ def write_yaml(path: Path, obj: Any):
 
 
 # ---------------------------
+# Template rendering helper
+# ---------------------------
+class DefaultDict(dict):
+    def __missing__(self, key):
+        return ""
+
+
+def render_templates(lines: List[str], context: Dict) -> List[str]:
+    out = []
+    seen = set()
+    for l in lines:
+        if not l:
+            continue
+        try:
+            rendered = l.format_map(DefaultDict(context))
+        except Exception:
+            rendered = l
+        if rendered and rendered not in seen:
+            out.append(rendered)
+            seen.add(rendered)
+    return out
+
+
+# ---------------------------
 # Recommendation config helpers
 # ---------------------------
 def load_recommendations_conf(path: Path) -> Dict:
@@ -57,12 +90,6 @@ def load_recommendations_conf(path: Path) -> Dict:
 
 
 def branch_matches(candidate_key: str, branch: str) -> bool:
-    """
-    branch matching tolerant:
-      - exact match
-      - lowercase match
-      - '-' <-> '_' substitution
-    """
     if candidate_key == branch:
         return True
     if candidate_key.lower() == branch.lower():
@@ -76,24 +103,18 @@ def branch_matches(candidate_key: str, branch: str) -> bool:
 
 def collect_repo_and_branch_rules(conf_repos: Dict, owner: str, repo_name: str, branch: str) -> List[str]:
     """
-    Return ordered list: first repo default rules (if any), then branch-specific rules (if any).
-    Do NOT include regex/global fallbacks automatically to avoid noisy defaults.
-    If no repo-specific rules are present, we return [] (caller may use globals as fallback).
+    Return ordered list: repo default rules then branch-specific rules.
+    If none present, returns [] (caller may fall back to globals).
     """
     full = f"{owner}/{repo_name}"
     selected: List[str] = []
 
     repo_conf = conf_repos.get(full)
     if not repo_conf:
-        # try regex keys that exactly match the repo (rare) but avoid '*' '.*' here
         import re
-
         for key, val in conf_repos.items():
             if key in ("*", ".*"):
                 continue
-            if key == full:
-                repo_conf = val
-                break
             try:
                 if re.fullmatch(key, full):
                     repo_conf = val
@@ -104,26 +125,24 @@ def collect_repo_and_branch_rules(conf_repos: Dict, owner: str, repo_name: str, 
     if not repo_conf:
         return []
 
-    # repo default (if present)
     if isinstance(repo_conf, dict):
         repo_default = repo_conf.get("default", [])
         if repo_default:
             selected.extend(repo_default)
-
-        # branch-specific, but appended AFTER repo default (per request: repo > branche)
         branches = repo_conf.get("branches", {}) or {}
-        # find matching branch keys with tolerant comparator
         for candidate_key, candidate_val in branches.items():
             if branch_matches(candidate_key, branch):
                 if isinstance(candidate_val, list):
                     selected.extend(candidate_val)
+                elif isinstance(candidate_val, dict):
+                    # if branch maps to dict (with events), ignore here
+                    pass
                 elif candidate_val is None:
-                    continue
+                    pass
                 else:
-                    selected.append(candidate_val)
-                break  # stop on first matching branch key
+                    selected.append(str(candidate_val))
+                break
     else:
-        # repo_conf might be a list directly
         if isinstance(repo_conf, list):
             selected.extend(repo_conf)
         elif repo_conf is None:
@@ -134,29 +153,52 @@ def collect_repo_and_branch_rules(conf_repos: Dict, owner: str, repo_name: str, 
     return selected
 
 
-def render_templates(lines: List[str], context: Dict) -> List[str]:
-    out = []
-    seen = set()
-    for l in lines:
-        if not l:
-            continue  # skip empty lines from YAML
-        try:
-            rendered = l.format_map(DefaultDict(context))
-        except Exception:
-            rendered = l
-        if rendered not in seen:
-            out.append(rendered)
-            seen.add(rendered)
-    return out
+def collect_templates_for_event(conf_repos: Dict, owner: str, repo_name: str, branch: str, event_type: str) -> List[str]:
+    """
+    Return list of templates defined for event_type at repo->branch->events.<event_type>
+    If none found, return [] (caller may fallback to globals).
+    """
+    full = f"{owner}/{repo_name}"
+    repo_conf = conf_repos.get(full)
+    if not repo_conf:
+        import re
+        for key, val in conf_repos.items():
+            if key in ("*", ".*"):
+                continue
+            try:
+                if re.fullmatch(key, full):
+                    repo_conf = val
+                    break
+            except re.error:
+                continue
 
+    if not repo_conf:
+        return []
 
-class DefaultDict(dict):
-    def __missing__(self, key):
-        return ""
+    templates = []
+    if isinstance(repo_conf, dict):
+        root_events = repo_conf.get("events", {})
+        if isinstance(root_events, dict):
+            templates.extend(root_events.get(event_type, []) or [])
+
+        branches = repo_conf.get("branches", {}) or {}
+        for candidate_key, candidate_val in branches.items():
+            if branch_matches(candidate_key, branch):
+                if isinstance(candidate_val, dict):
+                    evts = candidate_val.get("events", {}) or {}
+                    templates.extend(evts.get(event_type, []) or [])
+                elif isinstance(candidate_val, list):
+                    # list at branch level: treat as general templates
+                    templates.extend(candidate_val)
+                break
+    elif isinstance(repo_conf, list):
+        templates.extend(repo_conf)
+
+    return templates
 
 
 # ---------------------------
-# GitHub helpers
+# GitHub helpers (compare / trees)
 # ---------------------------
 def gh_get(url: str, params: Dict = None) -> requests.Response:
     r = requests.get(url, headers=HEADERS, params=params or {}, timeout=HTTP_TIMEOUT)
@@ -165,9 +207,11 @@ def gh_get(url: str, params: Dict = None) -> requests.Response:
 
 
 def get_default_branch(owner: str, repo: str) -> str:
+    """
+    Robust default branch fetch: if key missing/falsy, fallback to 'main'.
+    """
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
     j = gh_get(url).json()
-    # use 'or "main"' for robustness if key exists but is falsy
     return j.get("default_branch") or "main"
 
 
@@ -179,8 +223,125 @@ def get_latest_commit_on_branch(owner: str, repo: str, branch: str) -> Dict:
     return {"sha": sha, "date": date, "raw": j}
 
 
+def get_compare(owner: str, repo: str, base: str, head: str) -> Dict:
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/compare/{base}...{head}"
+    return gh_get(url).json()
+
+
+def get_tree_index(owner: str, repo: str, sha_or_ref: str) -> Dict[str, List[str]]:
+    """
+    Returns map dir -> [filenames] for the tree at sha_or_ref (recursive).
+    Top-level files are keyed under ".".
+    """
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{sha_or_ref}"
+    j = gh_get(url, params={"recursive": "1"}).json()
+    index: Dict[str, List[str]] = {}
+    for entry in j.get("tree", []) or []:
+        if entry.get("type") != "blob":
+            continue
+        path = entry.get("path", "")
+        dirpath = "/".join(path.split("/")[:-1])
+        if dirpath == "":
+            dirpath = "."
+        filename = path.split("/")[-1]
+        index.setdefault(dirpath, []).append(filename)
+    return index
+
+
 # ---------------------------
-# Notifications (Slack example)
+# Classification (updated signature)
+# ---------------------------
+def classify_files_events(files_changed: List[Dict[str, Any]], prev_index: Dict[str, List[str]], new_index: Dict[str, List[str]]) -> Dict[str, List[Dict[str, str]]]:
+    """
+    Mise à jour : ajoute la détection 'collection_removed'.
+    - files_changed : list de dicts venant de l'API compare
+    - prev_index / new_index : map dir -> [filenames] (tree index)
+    Retourne dict:
+      {
+        "collection_created": [{"collection": ...}, ...],
+        "collection_removed": [{"collection": ...}, ...],
+        "term_created": [{"collection":..., "term":..., "path":...}, ...],
+        "term_modified": [...],
+        "term_removed": [...]
+      }
+    """
+    events = {
+        "collection_created": [],
+        "collection_removed": [],
+        "term_created": [],
+        "term_modified": [],
+        "term_removed": [],
+    }
+
+    prev_dirs = set(prev_index.keys() if prev_index else [])
+    new_dirs = set(new_index.keys() if new_index else [])
+    seen_collections = set()
+
+    def _add_collection_created(col):
+        if col not in seen_collections:
+            events["collection_created"].append({"collection": col})
+            seen_collections.add(col)
+
+    # Process file-level changes first (added/modified/removed/renamed)
+    for f in files_changed:
+        path = f.get("filename")
+        status = f.get("status")
+        prev_filename = f.get("previous_filename")
+
+        if not path:
+            continue
+
+        if "/" not in path:
+            # ignore top-level files for this classification
+            continue
+
+        collection, term = path.split("/", 1)
+
+        if status == "added":
+            if collection not in prev_dirs:
+                _add_collection_created(collection)
+            events["term_created"].append({"collection": collection, "term": term, "path": path})
+        elif status == "modified":
+            events["term_modified"].append({"collection": collection, "term": term, "path": path})
+        elif status == "removed":
+            events["term_removed"].append({"collection": collection, "term": term, "path": path})
+        elif status == "renamed":
+            if prev_filename and "/" in prev_filename:
+                prev_collection, prev_term = prev_filename.split("/", 1)
+                events["term_removed"].append({"collection": prev_collection, "term": prev_term, "path": prev_filename})
+            events["term_created"].append({"collection": collection, "term": term, "path": path})
+        else:
+            continue
+
+    # Now detect collections that existed before but no longer exist -> collection_removed
+    removed_dirs = sorted(prev_dirs - new_dirs)
+    for col in removed_dirs:
+        # avoid emitting a collection_removed that we might have already emitted as created (unlikely)
+        if col not in seen_collections:
+            events["collection_removed"].append({"collection": col})
+
+    # Deduplicate lists preserving order (helper for dict lists)
+    def _dedup_dicts(lst, key):
+        seen = set()
+        out = []
+        for d in lst:
+            k = d.get(key)
+            if k not in seen:
+                out.append(d)
+                seen.add(k)
+        return out
+
+    events["collection_created"] = _dedup_dicts(events["collection_created"], "collection")
+    events["collection_removed"] = _dedup_dicts(events["collection_removed"], "collection")
+    events["term_created"] = _dedup_dicts(events["term_created"], "path")
+    events["term_modified"] = _dedup_dicts(events["term_modified"], "path")
+    events["term_removed"] = _dedup_dicts(events["term_removed"], "path")
+
+    return events
+
+
+# ---------------------------
+# Notifications (Slack)
 # ---------------------------
 def send_slack_message(webhook_url: str, text: str) -> bool:
     if not webhook_url:
@@ -199,9 +360,14 @@ def send_slack_message(webhook_url: str, text: str) -> bool:
 # ---------------------------
 @task(retries=1, retry_delay_seconds=5)
 def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: str) -> Dict:
+    """
+    Task : vérifie un repo@branch, construit recommandations/events,
+    crée un artifact Markdown spécifique à ce repo, et retourne le résultat
+    incluant 'artifact_key' et 'artifact_path'.
+    """
     logger = get_run_logger()
 
-    # parse
+    # parse input
     if "@" in repo_with_branch:
         repo_key, branch = repo_with_branch.split("@", 1)
     else:
@@ -218,7 +384,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     state = read_yaml(state_file) or {}
     reco_conf = load_recommendations_conf(reco_file)
 
-    # branch fallback to default branch if not provided
+    # branch fallback
     if not branch:
         try:
             branch = get_default_branch(owner, repo_name)
@@ -241,65 +407,252 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     if isinstance(repo_state, dict):
         recorded = repo_state.get(branch)
 
-    # determine change
-    recorded_sha = (recorded or {}).get("sha")
-    changed = (recorded is None) or (sha and recorded_sha != sha)
-
-    # if changed: collect repo-level and branch-level recos only for this repo
-    rec_lines: List[str] = []
-    if changed:
-        # collect repo+branch rules (repo default then branch)
-        repo_rules = collect_repo_and_branch_rules(reco_conf.get("repos", {}), owner, repo_name, branch)
-
-        if repo_rules:
-            rec_lines.extend(repo_rules)
-        else:
-            # if no repo-specific rules, use globals as fallback (optional)
-            rec_lines.extend(reco_conf.get("globals", []))
-
-        # auto hints appended last
-        rec_lines.append("Auto: Detected change on {repo}@{branch}: {sha[:8]} at {date}.")
-        rec_lines.append("Auto: Steps recommandés: pull, rebuild, run tests, check CI.")
-    else:
-        # no change -> do not include recommendations
-        logger.info(f"No change for {repo_key}@{branch}; skipping recommendations.")
-
-    # render templates (remove duplicates & empty)
-    context = {
-        "repo": repo_key,
-        "owner": owner,
-        "repo_name": repo_name,
-        "branch": branch,
-        "sha": sha or "",
-        "date": date or "",
-    }
-    recommendations = render_templates(rec_lines, context)
-
-    # update state only if changed (or if first time)
-    if changed:
+    # FIRST RUN: initialize index and do not emit recommendations
+    if recorded is None:
+        try:
+            new_index = get_tree_index(owner, repo_name, sha)
+        except Exception:
+            new_index = {}
         state.setdefault(repo_key, {})[branch] = {
             "sha": sha,
             "date": date,
             "checked_at": datetime.now(timezone.utc).isoformat(),
+            "files_index": new_index,
         }
         write_yaml(state_file, state)
-        logger.info(f"State updated for {repo_key}@{branch}: {sha[:8] if sha else 'None'}")
+        logger.info(f"Initial state recorded for {repo_key}@{branch} (no recommendations on first run).")
+
+        # build per-task artifact (initial run summary)
+        md_lines = [
+            f"# Repo check — {repo_key}@{branch}",
+            "",
+            f"- sha: {sha}",
+            f"- date: {date}",
+            "",
+            "_Initial scan — state recorded. No recommendations produced on first run._",
+        ]
+        md_content = "\n".join(md_lines)
+
+        # write local artifact
+        artifacts_dir = Path("artifacts/per-repo")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+        safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
+        artifact_fname = artifacts_dir / f"{owner}-{repo_name}-{safe_branch}-{ts_short}.md"
+        artifact_fname.write_text(md_content, encoding="utf-8")
+
+        # create Prefect artifact key (lowercase, letters/numbers/dashes)
+        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+        artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
+
+        try:
+            create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Repo report for {repo_key}@{branch}")
+        except Exception as exc:
+            logger.warning(f"Impossible de créer l'artifact Prefect pour {repo_key}: {exc}")
+
+        return {
+            "repo": repo_key,
+            "branch": branch,
+            "sha": sha,
+            "date": date,
+            "changed": False,
+            "recorded": None,
+            "recommendations": [],
+            "events": {},
+            "artifact_key": artifact_key,
+            "artifact_path": str(artifact_fname),
+        }
+
+    # if sha unchanged -> nothing to do
+    prev_sha = recorded.get("sha")
+    if prev_sha == sha:
+        logger.info(f"No new commits for {repo_key}@{branch}")
+
+        # build minimal artifact indicating no-change (optional)
+        md_lines = [
+            f"# Repo check — {repo_key}@{branch}",
+            "",
+            f"- sha: {sha}",
+            f"- date: {date}",
+            f"- previously recorded sha: {prev_sha}",
+            "",
+            "_No new commits since last check. No recommendations._",
+        ]
+        md_content = "\n".join(md_lines)
+
+        artifacts_dir = Path("artifacts/per-repo")
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+        safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
+        artifact_fname = artifacts_dir / f"{owner}-{repo_name}-{safe_branch}-{ts_short}.md"
+        artifact_fname.write_text(md_content, encoding="utf-8")
+
+        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+        artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
+
+        try:
+            create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"No-change report for {repo_key}@{branch}")
+        except Exception as exc:
+            logger.warning(f"Impossible de créer l'artifact Prefect pour {repo_key}: {exc}")
+
+        return {
+            "repo": repo_key,
+            "branch": branch,
+            "sha": sha,
+            "date": date,
+            "changed": False,
+            "recorded": recorded,
+            "recommendations": [],
+            "events": {},
+            "artifact_key": artifact_key,
+            "artifact_path": str(artifact_fname),
+        }
+
+    # CHANGES: try compare API
+    try:
+        cmp = get_compare(owner, repo_name, prev_sha, sha)
+        files_changed = cmp.get("files", []) or []
+    except Exception as exc:
+        logger.warning(f"Compare API failed: {exc} — falling back to tree diff.")
+        prev_index = recorded.get("files_index") or {}
+        try:
+            new_index = get_tree_index(owner, repo_name, sha)
+        except Exception:
+            new_index = {}
+        prev_files = set()
+        for dir_, files in (prev_index or {}).items():
+            for f in files:
+                prev_files.add(f"{dir_}/{f}" if dir_ != "." else f)
+        new_files = set()
+        for dir_, files in (new_index or {}).items():
+            for f in files:
+                new_files.add(f"{dir_}/{f}" if dir_ != "." else f)
+        files_changed = []
+        for p in new_files - prev_files:
+            files_changed.append({"filename": p, "status": "added"})
+        for p in prev_files - new_files:
+            files_changed.append({"filename": p, "status": "removed"})
+
+    # load indices for classification
+    prev_index = recorded.get("files_index") or {}
+    try:
+        new_index = get_tree_index(owner, repo_name, sha)
+    except Exception:
+        new_index = {}
+
+    events = classify_files_events(files_changed, prev_index, new_index)
+
+    # build recommendations from events (only for events that occurred)
+    rec_lines: List[str] = []
+    for ev_type, ev_list in events.items():
+        if not ev_list:
+            continue
+        templates = collect_templates_for_event(reco_conf.get("repos", {}), owner, repo_name, branch, ev_type)
+        if not templates:
+            # fallback to globals if present
+            templates = reco_conf.get("globals", [])
+        for occ in ev_list:
+            # occ is a dict like {"collection":..,"term":..,"path":..} or {"collection":..}
+            context_ev = {
+                "repo": repo_key,
+                "owner": owner,
+                "repo_name": repo_name,
+                "branch": branch,
+                "sha": sha or "",
+                "date": date or "",
+                "collection": occ.get("collection", ""),
+                "term": occ.get("term", ""),
+                "path": occ.get("path", ""),
+            }
+            for t in templates:
+                try:
+                    rendered = t.format_map(DefaultDict(context_ev))
+                except Exception:
+                    rendered = t
+                if rendered and rendered not in rec_lines:
+                    rec_lines.append(rendered)
+
+    # append auto hints
+    rec_lines.append(f"Auto: change(s) detected between {prev_sha[:8]} and {sha[:8]} on branch {branch}.")
+    rec_lines.append("Auto: Steps recommandés: pull, rebuild, run tests, check CI.")
+
+    # update state
+    state.setdefault(repo_key, {})[branch] = {
+        "sha": sha,
+        "date": date,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "files_index": new_index,
+    }
+    write_yaml(state_file, state)
+    logger.info(f"State updated for {repo_key}@{branch}: {sha[:8] if sha else 'None'}")
+
+    # --- build per-task markdown artifact (repo-specific) ---
+    md_lines = [
+        f"# Repo check — {repo_key}@{branch}",
+        "",
+        f"- sha: {sha}",
+        f"- date: {date}",
+        f"- previously recorded sha: {prev_sha}",
+        "",
+    ]
+    if rec_lines:
+        md_lines.append("### Recommendations")
+        for rec in rec_lines:
+            md_lines.append(f"- {rec}")
+        md_lines.append("")
+    if events:
+        md_lines.append("### Events detected")
+        for etype, items in events.items():
+            if not items:
+                continue
+            md_lines.append(f"- {etype}:")
+            for it in items:
+                # print collection name or term depending on dict keys
+                if isinstance(it, dict):
+                    col = it.get("collection")
+                    term = it.get("term")
+                    if etype == "collection_created":
+                        md_lines.append(f"  - {col}")
+                    else:
+                        md_lines.append(f"  - {term}")
+                else:
+                    md_lines.append(f"  - {it}")
+        md_lines.append("")
+
+    md_content = "\n".join(md_lines)
+
+    artifacts_dir = Path("artifacts/per-repo")
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+    safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
+    artifact_fname = artifacts_dir / f"{owner}-{repo_name}-{safe_branch}-{ts_short}.md"
+    artifact_fname.write_text(md_content, encoding="utf-8")
+
+    artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+    artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
+
+    try:
+        create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Repo report for {repo_key}@{branch}")
+    except Exception as exc:
+        logger.warning(f"Impossible de créer l'artifact Prefect pour {repo_key}: {exc}")
 
     result = {
         "repo": repo_key,
         "branch": branch,
         "sha": sha,
         "date": date,
-        "changed": bool(changed),
+        "changed": True,
         "recorded": recorded,
-        "recommendations": recommendations,
+        "recommendations": rec_lines,
+        "events": events,
+        "artifact_key": artifact_key,
+        "artifact_path": str(artifact_fname),
     }
     return result
 
 
 @task
 def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts") -> str:
-    """Build a Markdown report and save it to artifacts/ with timestamp. Returns path."""
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     Path(artifacts_dir).mkdir(parents=True, exist_ok=True)
     md_path = Path(artifacts_dir) / f"repo_check_{ts}.md"
@@ -326,6 +679,28 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
             lines.append("### Recommendations")
             for rec in r["recommendations"]:
                 lines.append(f"- {rec}")
+        # show events detail optionally
+        if r.get("changed") and r.get("events"):
+            lines.append("")
+            lines.append("### Events detected")
+            for etype, items in r["events"].items():
+                if not items:
+                    continue
+                lines.append(f"- {etype}:")
+                # items are dicts; print collection or term depending on keys
+                for it in items:
+                    if isinstance(it, dict):
+                        if "collection" in it and it.get("term") is None:
+                            # collection-only entry
+                            lines.append(f"  - {it.get('collection')}")
+                        elif "collection" in it and it.get("term"):
+                            # term entry: print term only
+                            lines.append(f"  - {it.get('term')}")
+                        else:
+                            # fallback: print stringified dict
+                            lines.append(f"  - {it}")
+                    else:
+                        lines.append(f"  - {it}")
         lines.append("")
 
     lines.append("---")
@@ -333,15 +708,24 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
 
     md_content = "\n".join(lines)
     md_path.write_text(md_content, encoding="utf-8")
+
+    # create a safe artifact key (lowercase, digits, dashes)
+    artifact_key = f"repo-check-{ts[:8]}"  # YYYYMMDD
+    artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key.lower())
+
+    # créer aussi un artifact Prefect pour que le Markdown apparaisse dans l'UI
+    try:
+        create_markdown_artifact(md_content, key=artifact_key, description="Rapport des vérifications des dépôts")
+    except Exception as exc:
+        # ne fais pas planter le flow si l'API artifact n'est indisponible
+        logger = get_run_logger()
+        logger.warning(f"Impossible de créer l'artifact Prefect: {exc}")
+
     return str(md_path)
 
 
 @task(retries=0)
 def notify_on_changes_task(results: List[Dict], slack_webhook_env: str = "SLACK_WEBHOOK_URL") -> Dict:
-    """
-    If any result has changed==True, send a Slack notification (simple text).
-    Returns a dict summarizing notifications sent.
-    """
     logger = get_run_logger()
     webhook = os.environ.get(slack_webhook_env)
     changed_items = [r for r in results if r.get("changed")]
@@ -357,11 +741,10 @@ def notify_on_changes_task(results: List[Dict], slack_webhook_env: str = "SLACK_
         branch = r["branch"]
         sha = (r.get("sha") or "")[:8]
         text_lines.append(f"- {repo}@{branch} — {sha}")
-
-    text_lines.append("")  # newline
+    text_lines.append("")
     text_lines.append("Voir le rapport généré dans les artifacts du run.")
-
     text = "\n".join(text_lines)
+
     if webhook:
         ok = send_slack_message(webhook, text)
         summary["sent"] = ok
@@ -376,38 +759,50 @@ def notify_on_changes_task(results: List[Dict], slack_webhook_env: str = "SLACK_
 @flow
 def github_repos_check_flow(
     repos: List[str],
-    state_path: str = "repo_watcher_state.yml",
+    state_path: str = "github_repos_state.yml",
     reco_path: str = "repo_recommendations.yml",
     parallel: bool = True,
     artifacts_dir: str = "artifacts",
     notify_slack: bool = True,
 ) -> Dict:
-    """
-    Main Prefect 3 flow.
-    - repos: list of "owner/repo@branch"
-    - returns a dict with keys: results (list), report_path, notify_summary
-    """
     logger = get_run_logger()
-    logger.info("Starting GitHub repos checker flow (v2)")
+    logger.info("Starting GitHub repos checker flow (full)")
 
-    # run checks
     results = []
     if parallel:
-        futures = [check_single_repo_task.submit(r, state_path, reco_path) for r in repos]
+        futures = []
+        for repo_spec in repos:
+            # calculer une branche si inline (repo@branch) ; on utilise la string brute pour le nom
+            # nom de task = "check:owner/repo@branch" (si @ absent, on laisse juste owner/repo)
+            if "@" in repo_spec:
+                repo_part = repo_spec
+            else:
+                repo_part = repo_spec  # branch pourra être déterminée dans la task
+            task_name = f"check:{repo_part}"
+            # soumettre la tâche avec un nom (with_options)
+            task_runner = check_single_repo_task.with_options(name=task_name)
+            futures.append(task_runner.submit(repo_spec, state_path, reco_path))
         for f in futures:
             results.append(f.result())
     else:
-        for r in repos:
-            results.append(check_single_repo_task(r, state_path, reco_path))
+        # exécution séquentielle — on donne aussi un nom par task
+        for repo_spec in repos:
+            if "@" in repo_spec:
+                repo_part = repo_spec
+            else:
+                repo_part = repo_spec
+            task_name = f"check:{repo_part}"
+            task_runner = check_single_repo_task.with_options(name=task_name)
+            # .submit + .result() garde le comportement synchrone dans le flow
+            f = task_runner.submit(repo_spec, state_path, reco_path)
+            results.append(f.result())
 
-    # build + save report (artifact)
+
     report_path = build_and_save_report(results, artifacts_dir=artifacts_dir)
-
     notify_summary = {}
     if notify_slack:
         notify_summary = notify_on_changes_task(results)
 
-    # print/log summary for Prefect UI
     changed = [r for r in results if r.get("changed")]
     logger.info(f"Checked {len(results)} repos — changes: {len(changed)}")
     logger.info(f"Report written to: {report_path}")
@@ -416,30 +811,38 @@ def github_repos_check_flow(
 
 
 # ---------------------------
-# Example YAML & demo
+# Example minimal recommendations YAML (for reference)
 # ---------------------------
 EXAMPLE_REC_YAML = """
 globals:
-  - "Note globale: vérifier les modules dépendants si interface modifiée."
+  - "Note globale: vérifier les modules dépendants si l'interface a changé."
 repos:
   alaupin-ipsl/WCRP-universe:
-    default:
-      - "Le dépot Universe a été mis à jour."
     branches:
       main:
-        - "Contactez Dan pour plus d'informations"
-      esgvoc-dev:
-        - "Contactez Laurent pour plus d'informations"
+        events:
+          collection_created:
+            - "Nouvelle DataDescriptor (collection) détectée : {collection} dans {repo}@{branch}."
+            - "Action recommandée : vérifier métadonnées et lancer ingestion si nécessaire."
+          term_created:
+            - "Nouveau terme '{term}' ajouté dans {collection} — vérifier schéma JSON et mapping."
+          term_modified:
+            - "Terme '{term}' modifié dans {collection} — vérifier breaking changes et changelog."
   alaupin-ipsl/CORDEX-CMIP6_CVs:
-    default:
-      - "Le dépôt des CVs de CORDEX-CMIP6 a été mis à jour"
     branches:
       main:
-        - "Vérifier integrity of CVs"
+        events:
+          term_created:
+            - "Nouveau terme CV : {term} → mettre à jour index & catalogue."
+          term_modified:
+            - "Modification de terme CV : {term} → vérifier impact sur les requêtes."
 """
 
+
 if __name__ == "__main__":
+    # Demo (modifie la liste ci-dessous pour tester localement)
     demo_repos = [
+        # format: owner/repo[@branch]
         "alaupin-ipsl/CORDEX-CMIP6_CVs@main",
         "alaupin-ipsl/WCRP-universe@esgvoc_dev",
     ]
