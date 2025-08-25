@@ -5,10 +5,10 @@ Fonctions:
  - Vérifie une liste de repos GitHub (owner/repo[@branch])
  - Conserve l'état dans un fichier YAML (sha, date, files_index)
  - Utilise l'API compare pour détecter added/modified/removed/renamed files
- - Classifie les changements en events: collection_created, term_created, term_modified, term_removed
+ - Classifie les changements en events: collection_created, term_created, term_modified, term_removed, collection_removed
  - Applique des templates de recommandations définis dans repo_recommendations.yml
  - Écrit un rapport Markdown dans artifacts/, renvoie le path dans le flow
- - Optionnel: envoie une notification Slack si des changements ont été détectés
+ - Optionnel: envoie une notification Slack si des changements ont été détectés (désactivé par défaut)
 
 Dépendances:
  pip install prefect requests pyyaml
@@ -23,8 +23,16 @@ from pathlib import Path
 
 import requests
 import yaml
+
+import asyncio
+import inspect
+import anyio
+
 from prefect import flow, task, get_run_logger
 from prefect.artifacts import create_markdown_artifact
+from prefect.runtime import flow_run as _flow_run
+from prefect.client.orchestration import get_client
+from prefect.blocks.notifications import SlackWebhook
 
 # ---------------------------
 # Configuration
@@ -36,6 +44,26 @@ if GITHUB_TOKEN:
     HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
 HTTP_TIMEOUT = 30
+
+
+def run_coro_sync(coro):
+    """
+    Run coroutine 'coro' and return its result from synchronous code.
+    Works even if an event loop is already running (applies nest_asyncio).
+    """
+    if not inspect.isawaitable(coro):
+        return coro
+    try:
+        return asyncio.run(coro)
+    except RuntimeError:
+        # event loop already running (e.g. Jupyter). Try nest_asyncio fallback.
+        try:
+            import nest_asyncio
+        except Exception:
+            raise
+        nest_asyncio.apply()
+        loop = asyncio.get_event_loop()
+        return loop.run_until_complete(coro)
 
 
 # ---------------------------
@@ -316,7 +344,6 @@ def classify_files_events(files_changed: List[Dict[str, Any]], prev_index: Dict[
     # Now detect collections that existed before but no longer exist -> collection_removed
     removed_dirs = sorted(prev_dirs - new_dirs)
     for col in removed_dirs:
-        # avoid emitting a collection_removed that we might have already emitted as created (unlikely)
         if col not in seen_collections:
             events["collection_removed"].append({"collection": col})
 
@@ -363,7 +390,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     """
     Task : vérifie un repo@branch, construit recommandations/events,
     crée un artifact Markdown spécifique à ce repo, et retourne le résultat
-    incluant 'artifact_key' et 'artifact_path'.
+    incluant 'artifact_key'.
     """
     logger = get_run_logger()
 
@@ -422,29 +449,19 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         write_yaml(state_file, state)
         logger.info(f"Initial state recorded for {repo_key}@{branch} (no recommendations on first run).")
 
-        # build per-task artifact (initial run summary)
-        md_lines = [
+        # Artifact Prefect (pas de fichier local)
+        ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+        safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
+        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+        artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
+        md_content = "\n".join([
             f"# Repo check — {repo_key}@{branch}",
             "",
             f"- sha: {sha}",
             f"- date: {date}",
             "",
             "_Initial scan — state recorded. No recommendations produced on first run._",
-        ]
-        md_content = "\n".join(md_lines)
-
-        # write local artifact
-        artifacts_dir = Path("artifacts/per-repo")
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
-        safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
-        artifact_fname = artifacts_dir / f"{owner}-{repo_name}-{safe_branch}-{ts_short}.md"
-        artifact_fname.write_text(md_content, encoding="utf-8")
-
-        # create Prefect artifact key (lowercase, letters/numbers/dashes)
-        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
-        artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
-
+        ])
         try:
             create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Repo report for {repo_key}@{branch}")
         except Exception as exc:
@@ -460,7 +477,6 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
             "recommendations": [],
             "events": {},
             "artifact_key": artifact_key,
-            "artifact_path": str(artifact_fname),
         }
 
     # if sha unchanged -> nothing to do
@@ -468,8 +484,12 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     if prev_sha == sha:
         logger.info(f"No new commits for {repo_key}@{branch}")
 
-        # build minimal artifact indicating no-change (optional)
-        md_lines = [
+        # Artifact Prefect minimal (pas de fichier local)
+        ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+        safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
+        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+        artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
+        md_content = "\n".join([
             f"# Repo check — {repo_key}@{branch}",
             "",
             f"- sha: {sha}",
@@ -477,19 +497,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
             f"- previously recorded sha: {prev_sha}",
             "",
             "_No new commits since last check. No recommendations._",
-        ]
-        md_content = "\n".join(md_lines)
-
-        artifacts_dir = Path("artifacts/per-repo")
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
-        safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
-        artifact_fname = artifacts_dir / f"{owner}-{repo_name}-{safe_branch}-{ts_short}.md"
-        artifact_fname.write_text(md_content, encoding="utf-8")
-
-        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
-        artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
-
+        ])
         try:
             create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"No-change report for {repo_key}@{branch}")
         except Exception as exc:
@@ -505,7 +513,6 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
             "recommendations": [],
             "events": {},
             "artifact_key": artifact_key,
-            "artifact_path": str(artifact_fname),
         }
 
     # CHANGES: try compare API
@@ -552,7 +559,6 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
             # fallback to globals if present
             templates = reco_conf.get("globals", [])
         for occ in ev_list:
-            # occ is a dict like {"collection":..,"term":..,"path":..} or {"collection":..}
             context_ev = {
                 "repo": repo_key,
                 "owner": owner,
@@ -586,7 +592,12 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     write_yaml(state_file, state)
     logger.info(f"State updated for {repo_key}@{branch}: {sha[:8] if sha else 'None'}")
 
-    # --- build per-task markdown artifact (repo-specific) ---
+    # Artifact Prefect (pas de fichier local)
+    ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+    safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
+    artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+    artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
+
     md_lines = [
         f"# Repo check — {repo_key}@{branch}",
         "",
@@ -607,11 +618,10 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
                 continue
             md_lines.append(f"- {etype}:")
             for it in items:
-                # print collection name or term depending on dict keys
                 if isinstance(it, dict):
                     col = it.get("collection")
                     term = it.get("term")
-                    if etype == "collection_created":
+                    if etype in ("collection_created", "collection_removed"):
                         md_lines.append(f"  - {col}")
                     else:
                         md_lines.append(f"  - {term}")
@@ -620,16 +630,6 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         md_lines.append("")
 
     md_content = "\n".join(md_lines)
-
-    artifacts_dir = Path("artifacts/per-repo")
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
-    safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
-    artifact_fname = artifacts_dir / f"{owner}-{repo_name}-{safe_branch}-{ts_short}.md"
-    artifact_fname.write_text(md_content, encoding="utf-8")
-
-    artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
-    artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
 
     try:
         create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Repo report for {repo_key}@{branch}")
@@ -646,7 +646,6 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         "recommendations": rec_lines,
         "events": events,
         "artifact_key": artifact_key,
-        "artifact_path": str(artifact_fname),
     }
     return result
 
@@ -658,7 +657,6 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
     md_path = Path(artifacts_dir) / f"repo_check_{ts}.md"
 
     lines = [f"# Repo check report — {ts}", ""]
-    changed_any = False
     for r in results:
         if r.get("error"):
             lines.append(f"## {r['repo']} ({r.get('branch','')}) — ERROR")
@@ -674,12 +672,10 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
         if recorded:
             lines.append(f"- previously recorded sha: {recorded.get('sha')}")
         if r.get("changed") and r.get("recommendations"):
-            changed_any = True
             lines.append("")
             lines.append("### Recommendations")
             for rec in r["recommendations"]:
                 lines.append(f"- {rec}")
-        # show events detail optionally
         if r.get("changed") and r.get("events"):
             lines.append("")
             lines.append("### Events detected")
@@ -687,17 +683,13 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
                 if not items:
                     continue
                 lines.append(f"- {etype}:")
-                # items are dicts; print collection or term depending on keys
                 for it in items:
                     if isinstance(it, dict):
-                        if "collection" in it and it.get("term") is None:
-                            # collection-only entry
+                        if "collection" in it and not it.get("term"):
                             lines.append(f"  - {it.get('collection')}")
-                        elif "collection" in it and it.get("term"):
-                            # term entry: print term only
+                        elif "term" in it:
                             lines.append(f"  - {it.get('term')}")
                         else:
-                            # fallback: print stringified dict
                             lines.append(f"  - {it}")
                     else:
                         lines.append(f"  - {it}")
@@ -709,49 +701,43 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
     md_content = "\n".join(lines)
     md_path.write_text(md_content, encoding="utf-8")
 
-    # create a safe artifact key (lowercase, digits, dashes)
-    artifact_key = f"repo-check-{ts[:8]}"  # YYYYMMDD
-    artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key.lower())
-
-    # créer aussi un artifact Prefect pour que le Markdown apparaisse dans l'UI
-    try:
-        create_markdown_artifact(md_content, key=artifact_key, description="Rapport des vérifications des dépôts")
-    except Exception as exc:
-        # ne fais pas planter le flow si l'API artifact n'est indisponible
-        logger = get_run_logger()
-        logger.warning(f"Impossible de créer l'artifact Prefect: {exc}")
-
     return str(md_path)
 
 
 @task(retries=0)
-def notify_on_changes_task(results: List[Dict], slack_webhook_env: str = "SLACK_WEBHOOK_URL") -> Dict:
+def notify_on_changes_task(results: List[Dict], slack_block_name: str = "slack-webhook-for-repo-checker") -> Dict:
+    """
+    Envoie une notification Slack via un Prefect Block si des changements sont détectés.
+    """
     logger = get_run_logger()
-    webhook = os.environ.get(slack_webhook_env)
     changed_items = [r for r in results if r.get("changed")]
     summary = {"changed_count": len(changed_items), "sent": False}
 
     if not changed_items:
-        logger.info("No changes detected — no notification sent.")
+        logger.info("No changes detected — no Slack notification sent.")
         return summary
 
-    text_lines = ["GitHub Watcher — changes detected:"]
+    text_lines = ["🔔 GitHub Watcher — changements détectés:"]
     for r in changed_items:
         repo = r["repo"]
         branch = r["branch"]
         sha = (r.get("sha") or "")[:8]
         text_lines.append(f"- {repo}@{branch} — {sha}")
     text_lines.append("")
-    text_lines.append("Voir le rapport généré dans les artifacts du run.")
+    text_lines.append("📄 Voir le rapport généré dans les artifacts du flow run.")
     text = "\n".join(text_lines)
 
-    if webhook:
-        ok = send_slack_message(webhook, text)
-        summary["sent"] = ok
-        logger.info(f"Slack notification sent: {ok}")
-    else:
-        logger.info("No SLACK_WEBHOOK_URL defined — skipping Slack notify. Summary:")
-        logger.info(text)
+    try:
+        slack_block_coro = SlackWebhook.load(slack_block_name)
+        slack_block = run_coro_sync(slack_block_coro)
+        
+        notify_coro = slack_block.notify(text)
+        run_coro_sync(notify_coro)
+
+        summary["sent"] = True
+        logger.info("Slack notification sent via Prefect Block.")
+    except Exception as exc:
+        logger.warning(f"Slack notification failed: {exc}")
 
     return summary
 
@@ -763,51 +749,88 @@ def github_repos_check_flow(
     reco_path: str = "repo_recommendations.yml",
     parallel: bool = True,
     artifacts_dir: str = "artifacts",
-    notify_slack: bool = True,
+    notify_slack: bool = True,  # DEFAULT CHANGED: pas de Slack par défaut
 ) -> Dict:
     logger = get_run_logger()
+
+    # NEW: renommer le flow-run dès le début
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    base_name = f"github-repos-check-{ts}"
+    try:
+        async def _rename_start():
+            async with get_client() as client:
+                await client.update_flow_run(_flow_run.id, name=base_name)
+        anyio.run(_rename_start)
+    except Exception as exc:
+        logger.warning(f"Flow run rename (start) failed: {exc}")
+
     logger.info("Starting GitHub repos checker flow (full)")
 
     results = []
     if parallel:
         futures = []
         for repo_spec in repos:
-            # calculer une branche si inline (repo@branch) ; on utilise la string brute pour le nom
-            # nom de task = "check:owner/repo@branch" (si @ absent, on laisse juste owner/repo)
+            # NOM DE TASK = "owner/repo@branch"
             if "@" in repo_spec:
                 repo_part = repo_spec
             else:
-                repo_part = repo_spec  # branch pourra être déterminée dans la task
-            task_name = f"check:{repo_part}"
-            # soumettre la tâche avec un nom (with_options)
-            task_runner = check_single_repo_task.with_options(name=task_name)
+                # Résoudre la branche par défaut pour le nom de task
+                try:
+                    owner, repo_name = repo_spec.split("/", 1)
+                    default_branch = get_default_branch(owner, repo_name)
+                    repo_part = f"{owner}/{repo_name}@{default_branch}"
+                except Exception:
+                    repo_part = repo_spec
+            task_runner = check_single_repo_task.with_options(name=repo_part)
             futures.append(task_runner.submit(repo_spec, state_path, reco_path))
         for f in futures:
             results.append(f.result())
     else:
-        # exécution séquentielle — on donne aussi un nom par task
         for repo_spec in repos:
             if "@" in repo_spec:
                 repo_part = repo_spec
             else:
-                repo_part = repo_spec
-            task_name = f"check:{repo_part}"
-            task_runner = check_single_repo_task.with_options(name=task_name)
-            # .submit + .result() garde le comportement synchrone dans le flow
-            f = task_runner.submit(repo_spec, state_path, reco_path)
-            results.append(f.result())
-
+                try:
+                    owner, repo_name = repo_spec.split("/", 1)
+                    default_branch = get_default_branch(owner, repo_name)
+                    repo_part = f"{owner}/{repo_name}@{default_branch}"
+                except Exception:
+                    repo_part = repo_spec
+            task_runner = check_single_repo_task.with_options(name=repo_part)
+            r = task_runner.submit(repo_spec, state_path, reco_path)
+            results.append(r.result())
 
     report_path = build_and_save_report(results, artifacts_dir=artifacts_dir)
+
+    # OPTIONNEL (désactivé par défaut)
     notify_summary = {}
     if notify_slack:
         notify_summary = notify_on_changes_task(results)
 
     changed = [r for r in results if r.get("changed")]
-    logger.info(f"Checked {len(results)} repos — changes: {len(changed)}")
+    changed_count = len(changed)
+
+    logger.info(f"Checked {len(results)} repos — changes: {changed_count}")
     logger.info(f"Report written to: {report_path}")
 
-    return {"results": results, "report_path": report_path, "notify": notify_summary}
+    # NEW: renommer le flow-run en fin d’exécution pour faciliter une Automation
+    try:
+        suffix = f"changes-{changed_count}" if changed_count > 0 else "nochange"
+        final_name = f"{base_name}-{suffix}"
+        async def _rename_end():
+            async with get_client() as client:
+                await client.update_flow_run(_flow_run.id, name=final_name)
+        anyio.run(_rename_end)
+    except Exception as exc:
+        logger.warning(f"Flow run rename (end) failed: {exc}")
+
+    return {
+        "results": results,
+        "report_path": report_path,
+        "notify": notify_summary,
+        "changed_count": changed_count,          # <- utile pour Automation basée sur le résultat
+        "changed_repos": [f"{r['repo']}@{r['branch']}" for r in changed],
+    }
 
 
 # ---------------------------
@@ -844,7 +867,12 @@ if __name__ == "__main__":
     demo_repos = [
         # format: owner/repo[@branch]
         "alaupin-ipsl/CORDEX-CMIP6_CVs@main",
-        "alaupin-ipsl/WCRP-universe@esgvoc_dev",
+        "WCRP-CMIP/WCRP-universe@esgvoc_dev",
+        "ltroussellier/test_new_CV@esgvoc",
+        "ltroussellier/obs4MIPs_CVs@REF",
+        "WCRP-CMIP/CMIP6Plus_CVs@esgvoc",
+        "WCRP-CMIP/CMIP6_CVs@esgvoc",
+        "WCRP-CMIP/CMIP7_CVs@esgvoc"
     ]
 
     rec_path = Path("repo_recommendations.yml")
@@ -853,5 +881,5 @@ if __name__ == "__main__":
         print(f"Wrote example recommendations to {rec_path}")
 
     state_path = "repo_watcher_state.yml"
-    out = github_repos_check_flow(demo_repos, state_path=state_path, reco_path=str(rec_path), parallel=True, notify_slack=False)
+    out = github_repos_check_flow(demo_repos, state_path=state_path, reco_path=str(rec_path), parallel=True, notify_slack=True)
     print(json.dumps(out, indent=2, ensure_ascii=False))
