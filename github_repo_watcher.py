@@ -299,7 +299,6 @@ def gh_get(url: str, params: Dict = None) -> requests.Response:
     raise RuntimeError(f"Failed to GET {url} after {max_attempts} attempts (rate-limited or server error)")
 
 
-
 def get_default_branch(owner: str, repo: str) -> str:
     """
     Robust default branch fetch: if key missing/falsy, fallback to 'main'.
@@ -326,8 +325,23 @@ def get_tree_index(owner: str, repo: str, sha_or_ref: str) -> Dict[str, List[str
     """
     Returns map dir -> [filenames] for the tree at sha_or_ref (recursive).
     Top-level files are keyed under ".".
+
+    sha_or_ref can be:
+      - a full 40-character commit SHA
+      - a branch name (e.g. "main") — in that case we resolve the latest commit SHA first.
     """
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{sha_or_ref}"
+    # if sha_or_ref does not look like a commit SHA, resolve it
+    resolved_sha = sha_or_ref
+    if not isinstance(sha_or_ref, str) or len(sha_or_ref) != 40 or not re.fullmatch(r"[0-9a-fA-F]{40}", sha_or_ref):
+        # attempt to resolve branch name to latest commit sha
+        try:
+            latest = get_latest_commit_on_branch(owner, repo, sha_or_ref)
+            resolved_sha = latest.get("sha") or sha_or_ref
+        except Exception:
+            # let the downstream gh_get raise a clear error if resolution fails
+            resolved_sha = sha_or_ref
+
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{resolved_sha}"
     j = gh_get(url, params={"recursive": "1"}).json()
     index: Dict[str, List[str]] = {}
     for entry in j.get("tree", []) or []:
@@ -401,7 +415,10 @@ def classify_files_events(files_changed: List[Dict[str, Any]], prev_index: Dict[
             continue
 
     # Now detect collections that existed before but no longer exist -> collection_removed
-    removed_dirs = sorted(prev_dirs - new_dirs)
+    # ignore the top-level "." directory when detecting collection removal
+    prev_dirs_filtered = {d for d in prev_dirs if d != "."}
+    new_dirs_filtered = {d for d in new_dirs if d != "."}
+    removed_dirs = sorted(prev_dirs_filtered - new_dirs_filtered)
     for col in removed_dirs:
         if col not in seen_collections:
             events["collection_removed"].append({"collection": col})
@@ -475,6 +492,7 @@ def check_reference_consistency_minimal(
 
     # fetch reference root files (fail-fast on error so user gets alerted)
     try:
+        # get_tree_index now resolves branch->sha internally, but pass the branch name
         ref_tree = get_tree_index(owner, repo_name, reference_branch)
         ref_root_files = ref_tree.get(".", []) or []
     except Exception as exc:
@@ -490,7 +508,7 @@ def check_reference_consistency_minimal(
     # pattern PROJECT_collection.json -> capture project and collection
     pattern = re.compile(r"^([A-Za-z0-9\-_]+)_([A-Za-z0-9_]+)\.json$", flags=re.IGNORECASE)
 
-    # helper to fetch contents of a file at a given ref (branch)
+    # helper to fetch contents of a file at a given ref (branch or sha)
     def _fetch_contents(path: str, ref: str):
         try:
             url = f"{GITHUB_API_BASE}/repos/{owner}/{repo_name}/contents/{path}"
@@ -963,14 +981,18 @@ def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, stat
 
     logger.info(f"Compare reference for {repo_key}: working={working_branch}, reference={reference_branch}")
 
-    # fetch tree index for working branch (if fails, we continue but will log/record issues)
-    try:
-        latest = get_latest_commit_on_branch(owner, repo_name, working_branch)
-        working_sha = latest.get("sha")
-        new_index = get_tree_index(owner, repo_name, working_sha)
-    except Exception as exc:
-        logger.warning(f"Could not fetch working tree for {repo_key}@{working_branch}: {exc}")
-        new_index = {}
+    # Prefer using files_index produced by check_single_repo_task if present (minimize API calls)
+    if check_result and isinstance(check_result, dict) and check_result.get("files_index"):
+        new_index = check_result.get("files_index") or {}
+    else:
+        # fetch tree index for working branch (if fails, we continue but will log/record issues)
+        try:
+            latest = get_latest_commit_on_branch(owner, repo_name, working_branch)
+            working_sha = latest.get("sha")
+            new_index = get_tree_index(owner, repo_name, working_sha)
+        except Exception as exc:
+            logger.warning(f"Could not fetch working tree for {repo_key}@{working_branch}: {exc}")
+            new_index = {}
 
     # run minimal consistency check; this will raise if reference tree fetch fails (fail-fast)
     ref_events = check_reference_consistency_minimal(owner, repo_name, working_branch, reference_branch, new_index, project=project)
@@ -1184,7 +1206,6 @@ def github_repos_check_flow(
     repos: List[Dict[str, Any]] = None,
     state_path: str = "repo_watcher_state.yml",
     reco_path: str = "repo_recommendations.yml",
-    parallel: bool = True,
     artifacts_dir: str = "artifacts",
     notify_slack: bool = False,
 ):
@@ -1203,116 +1224,70 @@ def github_repos_check_flow(
     results = []
     # We'll keep mapping of check futures to their repo_spec so we can submit compare task when needed
     futures = []  # list of tuples (check_future, repo_spec)
-    if parallel:
-        for repo_spec in repos_list:
-            # determine a sensible task name
-            if isinstance(repo_spec, dict):
-                owner = repo_spec.get("owner")
-                repo_name = repo_spec.get("repo")
-                branch = repo_spec.get("working_branch") or ""
-                task_name = f"{owner}/{repo_name}" + (f"@{branch}" if branch else "")
-                check_future = check_single_repo_task.with_options(name=task_name).submit(f"{owner}/{repo_name}@{branch}" if branch else f"{owner}/{repo_name}", state_path, reco_path)
+    for repo_spec in repos_list:
+        # determine a sensible task name
+        if isinstance(repo_spec, dict):
+            owner = repo_spec.get("owner")
+            repo_name = repo_spec.get("repo")
+            branch = repo_spec.get("working_branch") or ""
+            task_name = f"{owner}/{repo_name}" + (f"@{branch}" if branch else "")
+            check_future = check_single_repo_task.with_options(name=task_name).submit(f"{owner}/{repo_name}@{branch}" if branch else f"{owner}/{repo_name}", state_path, reco_path)
+        else:
+            # string: pass-through
+            repo_spec_str = str(repo_spec)
+            if "@" in repo_spec_str:
+                task_name = repo_spec_str
             else:
-                # string: pass-through
-                repo_spec_str = str(repo_spec)
-                if "@" in repo_spec_str:
-                    task_name = repo_spec_str
-                else:
-                    task_name = repo_spec_str
-                check_future = check_single_repo_task.with_options(name=task_name).submit(repo_spec_str, state_path, reco_path)
-            futures.append((check_future, repo_spec))
-        # now optionally submit compare_reference_task for those repo_specs that include a reference_branch (keep dependency)
-        compare_futures = []
-        for check_fut, repo_spec in futures:
-            # determine if repo_spec has a reference_branch
-            has_ref = False
-            if isinstance(repo_spec, dict) and repo_spec.get("reference_branch"):
-                has_ref = True
-            # also allow string format "owner/repo@working" with no reference -> skip
-            if has_ref:
-                comp_fut = compare_reference_task.submit(repo_spec, check_fut, state_path, reco_path)
-            else:
-                comp_fut = None
-            compare_futures.append((check_fut, comp_fut, repo_spec))
-        # collect results and merge compare results where present
-        for check_fut, comp_fut, repo_spec in compare_futures:
-            check_res = check_fut.result()
-            # if compare future exists, merge its results
-            if comp_fut is not None:
-                comp_res = comp_fut.result()
-                # merge events
-                if comp_res.get("reference_events"):
-                    check_res.setdefault("events", {})
-                    for k, v in comp_res.get("reference_events").items():
-                        if v:
-                            existing = check_res["events"].get(k) or []
-                            existing_keys = {json.dumps(e, sort_keys=True) for e in existing if isinstance(e, dict)}
-                            for item in v:
-                                j = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
-                                if j not in existing_keys:
-                                    existing.append(item)
-                                    existing_keys.add(j)
-                            check_res["events"][k] = existing
-                # merge recommendations
-                if comp_res.get("reference_recommendations"):
-                    check_res.setdefault("recommendations", [])
-                    for r in comp_res.get("reference_recommendations"):
-                        if r not in check_res["recommendations"]:
-                            check_res["recommendations"].append(r)
-                    # if reference produced items but original check had no changes, mark changed True
-                    if comp_res.get("reference_recommendations") and not check_res.get("changed"):
-                        check_res["changed"] = True
-                # attach reference_recommendations and artifact_key for reporting
-                if comp_res.get("reference_recommendations"):
-                    check_res["reference_recommendations"] = comp_res.get("reference_recommendations")
-                if comp_res.get("artifact_key"):
-                    check_res["reference_artifact_key"] = comp_res.get("artifact_key")
-            results.append(check_res)
-    else:
-        # sequential mode
-        for repo_spec in repos_list:
-            if isinstance(repo_spec, dict):
-                owner = repo_spec.get("owner")
-                repo_name = repo_spec.get("repo")
-                branch = repo_spec.get("working_branch") or ""
-                task_name = f"{owner}/{repo_name}" + (f"@{branch}" if branch else "")
-                check_fut = check_single_repo_task.with_options(name=task_name).submit(f"{owner}/{repo_name}@{branch}" if branch else f"{owner}/{repo_name}", state_path, reco_path)
-            else:
-                repo_spec_str = str(repo_spec)
-                if "@" in repo_spec_str:
-                    task_name = repo_spec_str
-                else:
-                    task_name = repo_spec_str
-                check_fut = check_single_repo_task.with_options(name=task_name).submit(repo_spec_str, state_path, reco_path)
-            check_res = check_fut.result()
-            # if repo_spec has reference_branch, run compare (sequentially)
-            if isinstance(repo_spec, dict) and repo_spec.get("reference_branch"):
-                comp_res = compare_reference_task(repo_spec, check_res, state_path, reco_path)
-                # merge similarly
-                if comp_res.get("reference_events"):
-                    check_res.setdefault("events", {})
-                    for k, v in comp_res.get("reference_events").items():
-                        if v:
-                            existing = check_res["events"].get(k) or []
-                            existing_keys = {json.dumps(e, sort_keys=True) for e in existing if isinstance(e, dict)}
-                            for item in v:
-                                j = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
-                                if j not in existing_keys:
-                                    existing.append(item)
-                                    existing_keys.add(j)
-                            check_res["events"][k] = existing
-                if comp_res.get("reference_recommendations"):
-                    check_res.setdefault("recommendations", [])
-                    for r in comp_res.get("reference_recommendations"):
-                        if r not in check_res["recommendations"]:
-                            check_res["recommendations"].append(r)
-                    if comp_res.get("reference_recommendations") and not check_res.get("changed"):
-                        check_res["changed"] = True
-                if comp_res.get("reference_recommendations"):
-                    check_res["reference_recommendations"] = comp_res.get("reference_recommendations")
-                if comp_res.get("artifact_key"):
-                    check_res["reference_artifact_key"] = comp_res.get("artifact_key")
-            results.append(check_res)
+                task_name = repo_spec_str
+            check_future = check_single_repo_task.with_options(name=task_name).submit(repo_spec_str, state_path, reco_path)
+        futures.append((check_future, repo_spec))
+    # now optionally submit compare_reference_task for those repo_specs that include a reference_branch (keep dependency)
+    compare_futures = []
+    for check_fut, repo_spec in futures:
+        # determine if repo_spec has a reference_branch
+        has_ref = False
+        if isinstance(repo_spec, dict) and repo_spec.get("reference_branch"):
+            has_ref = True
+        # also allow string format "owner/repo@working" with no reference -> skip
+        if has_ref:
+            comp_fut = compare_reference_task.submit(repo_spec, check_fut, state_path, reco_path)
+        else:
+            comp_fut = None
+        compare_futures.append((check_fut, comp_fut, repo_spec))
+    # collect results and merge compare results where present
+    for check_fut, comp_fut, repo_spec in compare_futures:
+        check_res = check_fut.result()
+        # if compare future exists, merge its results
+        if comp_fut is not None:
+            comp_res = comp_fut.result()
+            # merge events
+            if comp_res.get("reference_events"):
+                check_res.setdefault("events", {})
+                for k, v in comp_res.get("reference_events").items():
+                    if v:
+                        existing = check_res["events"].get(k) or []
+                        existing_keys = {json.dumps(e, sort_keys=True) for e in existing if isinstance(e, dict)}
+                        for item in v:
+                            j = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
+                            if j not in existing_keys:
+                                existing.append(item)
+                                existing_keys.add(j)
+                        check_res["events"][k] = existing
+            # merge recommendations
+            if comp_res.get("reference_recommendations"):
+                check_res.setdefault("recommendations", [])
+                for r in comp_res.get("reference_recommendations"):
+                    if r not in check_res["recommendations"]:
+                        check_res["recommendations"].append(r)
+                # if reference produced items but original check had no changes, mark changed True
+                if comp_res.get("reference_recommendations") and not check_res.get("changed"):
+                    check_res["changed"] = True
+            # attach reference_recommendations and artifact_key for reporting
+            if comp_res.get("reference_recommendations"):
+                check_res["reference_recommendations"] = comp_res.get("reference_recommendations")
+            if comp_res.get("artifact_key"):
+                check_res["reference_artifact_key"] = comp_res.get("artifact_key")
+        results.append(check_res)
 
     report_path = build_and_save_report(results, artifacts_dir=artifacts_dir)
 
@@ -1373,7 +1348,7 @@ if __name__ == "__main__":
             "repos": [
                 {"owner": "alaupin-ipsl", "repo": "CORDEX-CMIP6_CVs", "working_branch": "main", "reference_branch": None, "project": "CORDEX-CMIP6"},
                 {"owner": "WCRP-CMIP", "repo": "WCRP-universe", "working_branch": "esgvoc_dev", "reference_branch": None, "project": None},
-                {"owner": "ltroussellier", "repo": "test_new_CV", "working_branch": "esgvoc", "reference_branch": "main", "project": "input4MIPs"},
+                {"owner": "ltroussellier", "repo": "test_new_CV", "working_branch": "esgvoc", "reference_branch": "master", "project": "input4MIPs"},
                 {"owner": "ltroussellier", "repo": "obs4MIPs_CVs", "working_branch": "REF", "reference_branch": "main", "project": "obs4MIPs"},
                 {"owner": "WCRP-CMIP", "repo": "CMIP6Plus_CVs", "working_branch": "esgvoc", "reference_branch": "main", "project": "CMIP6Plus"},
                 {"owner": "WCRP-CMIP", "repo": "CMIP6_CVs", "working_branch": "esgvoc", "reference_branch": "main", "project": "CMIP6"},
@@ -1398,5 +1373,5 @@ if __name__ == "__main__":
     state_path = "repo_watcher_state.yml"
 
     # run flow with the list of dicts read from repos_config.yml
-    out = github_repos_check_flow(repos_cfg, state_path=state_path, reco_path=str(rec_path), parallel=True, notify_slack=False)
+    out = github_repos_check_flow(repos_cfg, state_path=state_path, reco_path=str(rec_path), notify_slack=True)
     # print(json.dumps(out, indent=2, ensure_ascii=False))
