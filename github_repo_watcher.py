@@ -1,24 +1,25 @@
+# prefect_github_repo_watcher_full.py
 """
-prefect_github_repo_watcher_full.py
+Functions:
+ - Vérifies a list of GitHub repos (owner/repo[@branch])
+ - Persists state into a YAML file (sha, date, files_index)
+ - Uses the GitHub compare API to detect added/modified/removed/renamed files
+ - Classifies changes into events: collection_created, term_created, term_modified, term_removed, collection_removed
+ - Applies recommendation templates defined in repo_recommendations.yml
+ - Writes a Markdown report into artifacts/, returns the path in the flow
+ - Optionally: send a Slack notification if changes are detected (disabled by default)
 
-Fonctions:
- - Vérifie une liste de repos GitHub (owner/repo[@branch])
- - Conserve l'état dans un fichier YAML (sha, date, files_index)
- - Utilise l'API compare pour détecter added/modified/removed/renamed files
- - Classifie les changements en events: collection_created, term_created, term_modified, term_removed, collection_removed
- - Applique des templates de recommandations définis dans repo_recommendations.yml
- - Écrit un rapport Markdown dans artifacts/, renvoie le path dans le flow
- - Optionnel: envoie une notification Slack si des changements ont été détectés (désactivé par défaut)
-
-Dépendances:
+Dependencies:
  pip install prefect requests pyyaml
 """
 
 import os
+import time
 import re
 import json
+import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Union
 from pathlib import Path
 
 import requests
@@ -44,6 +45,7 @@ if GITHUB_TOKEN:
     HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 
 HTTP_TIMEOUT = 30
+LOG = logging.getLogger("github_api")
 
 
 def run_coro_sync(coro):
@@ -229,9 +231,73 @@ def collect_templates_for_event(conf_repos: Dict, owner: str, repo_name: str, br
 # GitHub helpers (compare / trees)
 # ---------------------------
 def gh_get(url: str, params: Dict = None) -> requests.Response:
-    r = requests.get(url, headers=HEADERS, params=params or {}, timeout=HTTP_TIMEOUT)
-    r.raise_for_status()
-    return r
+    """
+    Helper GET with basic retry and GitHub rate-limit handling.
+    - short exponential backoff for transient errors
+    - tries to detect X-RateLimit-Remaining and X-RateLimit-Reset and act accordingly
+    Raises on non-recoverable errors.
+    """
+    import time, logging
+    LOG = logging.getLogger("github_api")
+    max_attempts = 6
+    backoff = 1.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = requests.get(url, headers=HEADERS, params=params or {}, timeout=HTTP_TIMEOUT)
+        except Exception as exc:
+            LOG.warning("Request error %s -> attempt %d/%d: %s", url, attempt, max_attempts, exc)
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+
+        # log rate-limit headers if present
+        rem = r.headers.get("X-RateLimit-Remaining")
+        reset = r.headers.get("X-RateLimit-Reset")
+        if rem is not None:
+            try:
+                LOG.debug("GitHub rate: remaining=%s reset=%s for %s", rem, reset, url)
+            except Exception:
+                pass
+
+        # handle explicit rate limit response
+        if r.status_code == 403:
+            body = (r.text or "").lower()
+            if rem == "0" or "rate limit exceeded" in body:
+                wait = None
+                try:
+                    reset_ts = int(reset)
+                    now_ts = int(time.time())
+                    wait = max(0, reset_ts - now_ts)
+                except Exception:
+                    wait = None
+
+                # if reset is soon (< 120s), wait explicitly; otherwise do short backoff retries
+                if wait is not None and wait <= 120:
+                    LOG.warning("Rate limit hit; sleeping %s seconds until reset for %s", wait, url)
+                    time.sleep(wait + 1)
+                    continue
+                else:
+                    LOG.warning("Rate limit hit; attempt %d/%d on %s (backoff)", attempt, max_attempts, url)
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+
+        # if server error, allow retries
+        if 500 <= r.status_code < 600 and attempt < max_attempts:
+            LOG.warning("Server error %s for %s -> retrying %d/%d", r.status_code, url, attempt, max_attempts)
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+
+        try:
+            r.raise_for_status()
+            return r
+        except requests.HTTPError:
+            # non-retryable client error (other than rate-limit handled above)
+            raise
+
+    raise RuntimeError(f"Failed to GET {url} after {max_attempts} attempts (rate-limited or server error)")
+
 
 
 def get_default_branch(owner: str, repo: str) -> str:
@@ -281,17 +347,10 @@ def get_tree_index(owner: str, repo: str, sha_or_ref: str) -> Dict[str, List[str
 # ---------------------------
 def classify_files_events(files_changed: List[Dict[str, Any]], prev_index: Dict[str, List[str]], new_index: Dict[str, List[str]]) -> Dict[str, List[Dict[str, str]]]:
     """
-    Mise à jour : ajoute la détection 'collection_removed'.
-    - files_changed : list de dicts venant de l'API compare
+    Updated: adds detection of 'collection_removed'.
+    - files_changed : list of dicts coming from the compare API
     - prev_index / new_index : map dir -> [filenames] (tree index)
-    Retourne dict:
-      {
-        "collection_created": [{"collection": ...}, ...],
-        "collection_removed": [{"collection": ...}, ...],
-        "term_created": [{"collection":..., "term":..., "path":...}, ...],
-        "term_modified": [...],
-        "term_removed": [...]
-      }
+    Returns dict of events.
     """
     events = {
         "collection_created": [],
@@ -382,15 +441,236 @@ def send_slack_message(webhook_url: str, text: str) -> bool:
         return False
 
 
+def check_reference_consistency_minimal(
+    owner: str,
+    repo_name: str,
+    working_branch: str,
+    reference_branch: str,
+    new_index: Dict[str, List[str]],
+    project: str | None = None,
+) -> Dict[str, List[Dict[str, str]]]:
+    """
+    Generic consistency check between reference_branch and working_branch.
+
+    - Fetch reference commit sha and tree (robust).
+    - Scan the reference branch root for files matching "PROJECT_<collection>.json".
+      If `project` is provided, only files whose PROJECT matches (case-insensitive)
+      are considered. If project is None, accept any PROJECT.
+    - For each such file, read the JSON and find the dict named after the collection key.
+      We try a case-insensitive lookup for the collection key inside the JSON.
+    - For each term in that dict, expect working branch file: "<collection>/<term.lower()>.json"
+    - Returns events dict with:
+        - reference_term_missing
+        - reference_term_mismatch
+        - reference_file_parse_error
+    """
+    events = {
+        "reference_term_missing": [],
+        "reference_term_mismatch": [],
+        "reference_file_parse_error": [],
+    }
+
+    # --- get reference tree robustly using commit SHA for the branch ---
+    try:
+        ref_commit = get_latest_commit_on_branch(owner, repo_name, reference_branch)
+        ref_sha = ref_commit.get("sha")
+        ref_tree = get_tree_index(owner, repo_name, ref_sha) if ref_sha else {}
+        ref_root_files = ref_tree.get(".", []) or []
+    except Exception:
+        ref_root_files = []
+
+    # prepare working index mapping (dir -> set(files))
+    working_index = new_index or {}
+    dir_map: Dict[str, set] = {}
+    for d, files in working_index.items():
+        dir_map[d] = set(files or [])
+
+    # pattern PROJECT_collection.json -> capture project and collection
+    pattern = re.compile(r"^([A-Za-z0-9\-_]+)_([A-Za-z0-9_]+)\.json$", flags=re.IGNORECASE)
+
+    # helper to fetch contents of a file at a given ref (branch or sha)
+    def _fetch_contents(path: str, ref: str):
+        try:
+            url = f"{GITHUB_API_BASE}/repos/{owner}/{repo_name}/contents/{path}"
+            r = requests.get(url, headers=HEADERS, params={"ref": ref}, timeout=HTTP_TIMEOUT)
+            r.raise_for_status()
+            j = r.json()
+            content = j.get("content")
+            encoding = j.get("encoding", "base64")
+            if content and encoding == "base64":
+                import base64 as _b64
+                return _b64.b64decode(content).decode("utf-8")
+            return content
+        except Exception:
+            return None
+
+    # iterate reference root files that match PROJECT_collection.json
+    for af in ref_root_files:
+        m = pattern.match(af)
+        if not m:
+            continue
+        ref_project = m.group(1)
+        collection_key = m.group(2)  # e.g. "activity_id" or "sub_experiment_id"
+
+        # if a project is provided, skip files whose project doesn't match
+        if project:
+            if ref_project.lower() != project.lower():
+                continue
+
+        # fetch and parse the reference file
+        content = _fetch_contents(af, reference_branch)
+        if not content:
+            events["reference_file_parse_error"].append({
+                "file": af,
+                "reason": "could not fetch content",
+                "collection": collection_key,
+            })
+            continue
+        try:
+            ref_json = json.loads(content)
+        except Exception as exc:
+            events["reference_file_parse_error"].append({
+                "file": af,
+                "reason": f"json parse error: {exc}",
+                "collection": collection_key,
+            })
+            continue
+
+        # --- robust: find the collection dict with a case-insensitive key match ---
+        collection_root = None
+        if isinstance(ref_json, dict):
+            # direct match
+            if collection_key in ref_json and isinstance(ref_json[collection_key], dict):
+                collection_root = ref_json[collection_key]
+            else:
+                # case-insensitive fallback: find key whose lower() equals collection_key.lower()
+                for k, v in ref_json.items():
+                    if k.lower() == collection_key.lower() and isinstance(v, dict):
+                        collection_root = v
+                        break
+
+        if not collection_root:
+            events["reference_file_parse_error"].append({
+                "file": af,
+                "reason": f"no '{collection_key}' dict found (case-insensitive lookup performed)",
+                "collection": collection_key,
+            })
+            continue
+
+        # for each term in the reference collection, expect working file at: collection_key/<term_lower>.json
+        for term_key in collection_root.keys():
+            expected_filename = f"{term_key.lower()}.json"
+            expected_path = f"{collection_key}/{expected_filename}"
+
+            # find collection directory in working tree ignoring case
+            matched_dir = None
+            for d in dir_map.keys():
+                if d.lower() == collection_key.lower():
+                    matched_dir = d
+                    break
+
+            found = False
+            found_path = None
+            actual_filename = None
+
+            if matched_dir:
+                # look for a file in that directory matching expected_filename case-insensitively
+                candidates = [f for f in dir_map.get(matched_dir, set()) if f.lower() == expected_filename.lower()]
+                if candidates:
+                    actual_filename = candidates[0]  # choose first match
+                    found_path = f"{matched_dir}/{actual_filename}"
+                    found = True
+
+            if not found:
+                events["reference_term_missing"].append({
+                    "file": af,
+                    "expected": expected_path,
+                    "key": term_key,
+                    "collection": collection_key,
+                })
+                continue
+
+            # fetch and validate working file content
+            working_content = _fetch_contents(found_path, working_branch)
+            if not working_content:
+                events["reference_term_mismatch"].append({
+                    "file": found_path,
+                    "reason": "could not fetch working file",
+                    "key": term_key,
+                    "collection": collection_key,
+                })
+                continue
+
+            try:
+                wj = json.loads(working_content)
+            except Exception as exc:
+                events["reference_term_mismatch"].append({
+                    "file": found_path,
+                    "reason": f"json parse error: {exc}",
+                    "key": term_key,
+                    "collection": collection_key,
+                })
+                continue
+
+            expected_id = term_key.lower()
+            actual_id = wj.get("id") if isinstance(wj, dict) else None
+
+            # compare IDs case-insensitively, but note when case differs
+            if actual_id is None:
+                events["reference_term_mismatch"].append({
+                    "file": found_path,
+                    "key": term_key,
+                    "reason": "missing 'id' field",
+                    "collection": collection_key,
+                })
+                continue
+
+            if actual_id.lower() != expected_id.lower():
+                events["reference_term_mismatch"].append({
+                    "file": found_path,
+                    "key": term_key,
+                    "expected_id": expected_id,
+                    "actual_id": actual_id,
+                    "collection": collection_key,
+                })
+                continue
+
+            # optional: record a warning if filename case differs from expected (for maintainers)
+            if actual_filename is not None and actual_filename != expected_filename:
+                # treat as valid but warn (we put it under mismatch with reason 'case difference')
+                events["reference_term_mismatch"].append({
+                    "file": found_path,
+                    "key": term_key,
+                    "reason": "filename case differs from expected",
+                    "expected_filename": expected_filename,
+                    "actual_filename": actual_filename,
+                    "collection": collection_key,
+                })
+
+            # check 'type' presence
+            actual_type = wj.get("type")
+            if not isinstance(actual_type, str) or not actual_type:
+                events["reference_term_mismatch"].append({
+                    "file": found_path,
+                    "key": term_key,
+                    "reason": "missing or invalid 'type' field",
+                    "collection": collection_key,
+                })
+
+    return events
+
+
 # ---------------------------
 # Prefect tasks & flow
 # ---------------------------
+
 @task(retries=1, retry_delay_seconds=5)
 def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: str) -> Dict:
     """
-    Task : vérifie un repo@branch, construit recommandations/events,
-    crée un artifact Markdown spécifique à ce repo, et retourne le résultat
-    incluant 'artifact_key'.
+    Task: checks a repo@branch, builds recommendations/events,
+    creates a per-repo Markdown artifact and returns the result including:
+      - 'artifact_key'
+      - 'files_index'  <-- NEW: the tree index used for this run (to be reused)
     """
     logger = get_run_logger()
 
@@ -401,7 +681,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         repo_key, branch = repo_with_branch, None
 
     if "/" not in repo_key:
-        return {"repo": repo_with_branch, "error": "Format attendu owner/repo[@branch]"}
+        return {"repo": repo_with_branch, "error": "Expected owner/repo[@branch]"}
 
     owner, repo_name = repo_key.split("/", 1)
     logger.info(f"Checking {repo_key} (branch={branch or 'DEFAULT'})")
@@ -449,7 +729,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         write_yaml(state_file, state)
         logger.info(f"Initial state recorded for {repo_key}@{branch} (no recommendations on first run).")
 
-        # Artifact Prefect (pas de fichier local)
+        # Artifact Prefect (no local file)
         ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
         safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
         artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
@@ -465,7 +745,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         try:
             create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Repo report for {repo_key}@{branch}")
         except Exception as exc:
-            logger.warning(f"Impossible de créer l'artifact Prefect pour {repo_key}: {exc}")
+            logger.warning(f"Failed to create Prefect artifact for {repo_key}: {exc}")
 
         return {
             "repo": repo_key,
@@ -477,6 +757,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
             "recommendations": [],
             "events": {},
             "artifact_key": artifact_key,
+            "files_index": new_index,
         }
 
     # if sha unchanged -> nothing to do
@@ -484,7 +765,10 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     if prev_sha == sha:
         logger.info(f"No new commits for {repo_key}@{branch}")
 
-        # Artifact Prefect minimal (pas de fichier local)
+        # use previously recorded index (avoid extra API calls)
+        new_index = recorded.get("files_index") or {}
+
+        # Artifact Prefect minimal (no local file)
         ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
         safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
         artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
@@ -501,7 +785,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         try:
             create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"No-change report for {repo_key}@{branch}")
         except Exception as exc:
-            logger.warning(f"Impossible de créer l'artifact Prefect pour {repo_key}: {exc}")
+            logger.warning(f"Failed to create Prefect artifact for {repo_key}: {exc}")
 
         return {
             "repo": repo_key,
@@ -513,6 +797,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
             "recommendations": [],
             "events": {},
             "artifact_key": artifact_key,
+            "files_index": new_index,
         }
 
     # CHANGES: try compare API
@@ -543,7 +828,9 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     # load indices for classification
     prev_index = recorded.get("files_index") or {}
     try:
-        new_index = get_tree_index(owner, repo_name, sha)
+        # new_index might already be set in the except/fallback above; otherwise fetch it
+        if "new_index" not in locals():
+            new_index = get_tree_index(owner, repo_name, sha)
     except Exception:
         new_index = {}
 
@@ -580,7 +867,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
 
     # append auto hints
     rec_lines.append(f"Auto: change(s) detected between {prev_sha[:8]} and {sha[:8]} on branch {branch}.")
-    rec_lines.append("Auto: Steps recommandés: pull, rebuild, run tests, check CI.")
+    rec_lines.append("Auto: Steps recommended: pull, rebuild, run tests, check CI.")
 
     # update state
     state.setdefault(repo_key, {})[branch] = {
@@ -592,7 +879,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     write_yaml(state_file, state)
     logger.info(f"State updated for {repo_key}@{branch}: {sha[:8] if sha else 'None'}")
 
-    # Artifact Prefect (pas de fichier local)
+    # Artifact Prefect (no local file)
     ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
     safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
     artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
@@ -634,7 +921,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     try:
         create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Repo report for {repo_key}@{branch}")
     except Exception as exc:
-        logger.warning(f"Impossible de créer l'artifact Prefect pour {repo_key}: {exc}")
+        logger.warning(f"Failed to create Prefect artifact for {repo_key}: {exc}")
 
     result = {
         "repo": repo_key,
@@ -646,8 +933,163 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         "recommendations": rec_lines,
         "events": events,
         "artifact_key": artifact_key,
+        "files_index": new_index,
     }
     return result
+
+
+# ---------------------------
+# --- ADDED / UPDATED: compare reference task (creates artifact) ---
+# ---------------------------
+@task(retries=0)
+def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, state_path: str, reco_path: str) -> Dict:
+    """
+    Compare working_branch vs reference_branch for a repo and create a markdown artifact describing results.
+    repo_spec should be a dict with keys 'owner', 'repo', 'working_branch', 'reference_branch', 'project' (optional).
+    check_result is the result from check_single_repo_task (used for context).
+    Returns dict with 'repo', 'reference_events', 'reference_recommendations', 'artifact_key'.
+    """
+    logger = get_run_logger()
+    reco_conf = load_recommendations_conf(Path(reco_path))
+
+    # parse repo_spec
+    if isinstance(repo_spec, dict):
+        owner = repo_spec.get("owner")
+        repo_name = repo_spec.get("repo")
+        working_branch = repo_spec.get("working_branch") or check_result.get("branch")
+        reference_branch = repo_spec.get("reference_branch")
+        project = repo_spec.get("project")
+    else:
+        # cannot do reference compare if repo_spec is a simple string (no reference info)
+        return {"repo": str(repo_spec), "reference_events": {}, "reference_recommendations": [], "artifact_key": None}
+
+    repo_key = f"{owner}/{repo_name}"
+    if not owner or not repo_name or not reference_branch:
+        logger.info(f"Skipping reference compare for {repo_key}: missing information")
+        return {"repo": repo_key, "reference_events": {}, "reference_recommendations": [], "artifact_key": None}
+
+    logger.info(f"Compare reference for {repo_key}: working={working_branch}, reference={reference_branch}")
+
+    # try to reuse files_index from check_result to avoid extra API calls
+    new_index = None
+    try:
+        new_index = check_result.get("files_index")
+    except Exception:
+        new_index = None
+
+    # if not available, fetch working tree index (last resort)
+    if new_index is None:
+        try:
+            latest = get_latest_commit_on_branch(owner, repo_name, working_branch)
+            working_sha = latest.get("sha")
+            new_index = get_tree_index(owner, repo_name, working_sha)
+        except Exception as exc:
+            # fail fast: cannot continue reference comparison without a working tree index
+            raise RuntimeError(f"Could not obtain working tree index for {owner}/{repo_name} (working={working_branch}). Underlying error: {exc}")
+
+    # run minimal consistency check (project-aware)
+    ref_events = check_reference_consistency_minimal(owner, repo_name, working_branch, reference_branch, new_index, project=project)
+
+    # build recommendations from ref_events using templates
+    rec_lines: List[str] = []
+    for ev_type, ev_list in ref_events.items():
+        if not ev_list:
+            continue
+        templates = collect_templates_for_event(reco_conf.get("repos", {}), owner, repo_name, working_branch, ev_type)
+        if not templates:
+            templates = reco_conf.get("globals", [])
+        for occ in ev_list:
+            context_ev = {
+                "repo": repo_key,
+                "owner": owner,
+                "repo_name": repo_name,
+                "branch": working_branch,
+                **(occ if isinstance(occ, dict) else {"item": occ}),
+            }
+            for t in templates:
+                try:
+                    rendered = t.format_map(DefaultDict(context_ev))
+                except Exception:
+                    rendered = t
+                if rendered and rendered not in rec_lines:
+                    rec_lines.append(rendered)
+
+    # auto hint if issues found
+    any_issues = any(len(v) > 0 for v in ref_events.values())
+    if any_issues:
+        rec_lines.append("Auto: Reference consistency issues detected between working and reference branches.")
+
+    # build markdown artifact for this reference check
+    ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
+    safe_branch = re.sub(r"[^a-z0-9-]", "-", (working_branch or "").lower())
+    raw_key = f"refcheck-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+    artifact_key = re.sub(r"[^a-z0-9-]", "-", raw_key.lower())
+
+    md_lines = [
+        f"# Reference coherence check — {owner}/{repo_name}",
+        "",
+        f"- working branch: {working_branch}",
+        f"- reference branch: {reference_branch}",
+        f"- checked at: {datetime.now(timezone.utc).isoformat()}",
+        "",
+    ]
+
+    issues = any(ref_events.get(k) for k in ref_events)
+    md_lines.append(f"- issues found: {bool(issues)}")
+    md_lines.append("")
+
+    # group and print per-collection for readability
+    from collections import defaultdict
+    grouped_missing = defaultdict(list)
+    grouped_mismatch = defaultdict(list)
+    grouped_parse = defaultdict(list)
+    for it in ref_events.get("reference_term_missing", []):
+        grouped_missing[it.get("collection") or "root"].append(it)
+    for it in ref_events.get("reference_term_mismatch", []):
+        grouped_mismatch[it.get("collection") or "root"].append(it)
+    for it in ref_events.get("reference_file_parse_error", []):
+        grouped_parse[it.get("collection") or "root"].append(it)
+
+    if grouped_missing:
+        md_lines.append("## Missing expected files in working branch")
+        for coll, items in grouped_missing.items():
+            md_lines.append(f"### {coll}")
+            for it in items:
+                md_lines.append(f"- expected {it.get('expected')} (from reference file {it.get('file')}, key={it.get('key')})")
+        md_lines.append("")
+
+    if grouped_mismatch:
+        md_lines.append("## Mismatched or invalid files in working branch")
+        for coll, items in grouped_mismatch.items():
+            md_lines.append(f"### {coll}")
+            for it in items:
+                if it.get("reason"):
+                    md_lines.append(f"- {it.get('file')}: {it.get('reason')} (key={it.get('key')})")
+                else:
+                    md_lines.append(f"- {it.get('file')}: expected id {it.get('expected_id')} got {it.get('actual_id')} (key={it.get('key')})")
+        md_lines.append("")
+
+    if grouped_parse:
+        md_lines.append("## Reference file parse errors")
+        for coll, items in grouped_parse.items():
+            md_lines.append(f"### {coll}")
+            for it in items:
+                md_lines.append(f"- {it.get('file')}: {it.get('reason')}")
+        md_lines.append("")
+
+    md_content = "\n".join(md_lines)
+
+    # try to publish artifact and also write a local summary
+    try:
+        create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Reference check for {owner}/{repo_name}")
+        ref_report_path = Path("artifacts") / f"refcheck_{owner}_{repo_name}_{ts_short}.md"
+        ref_report_path.parent.mkdir(parents=True, exist_ok=True)
+        ref_report_path.write_text(md_content, encoding="utf-8")
+    except Exception as exc:
+        logger.warning(f"Could not create reference check artifact: {exc}")
+        artifact_key = None
+
+    return {"repo": repo_key, "reference_events": ref_events, "reference_recommendations": rec_lines, "artifact_key": artifact_key}
 
 
 @task
@@ -665,7 +1107,7 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
             continue
 
         status = "CHANGED" if r.get("changed") else "no change"
-        lines.append(f"## {r['repo']}@{r['branch']} — {status}")
+        lines.append(f"## {r['repo']}@{r.get('branch','')} — {status}")
         lines.append(f"- sha: {r.get('sha')}")
         lines.append(f"- date: {r.get('date')}")
         recorded = r.get("recorded")
@@ -687,12 +1129,25 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
                     if isinstance(it, dict):
                         if "collection" in it and not it.get("term"):
                             lines.append(f"  - {it.get('collection')}")
-                        elif "term" in it:
-                            lines.append(f"  - {it.get('term')}")
+                        elif "expected" in it:
+                            lines.append(f"  - expected file missing: {it.get('expected')} (from {it.get('file')})")
+                        elif "file" in it and "reason" in it:
+                            lines.append(f"  - {it.get('file')}: {it.get('reason')}")
+                        elif "path" in it:
+                            if it.get("term"):
+                                lines.append(f"  - {it.get('path')}")
+                            else:
+                                lines.append(f"  - {it}")
                         else:
                             lines.append(f"  - {it}")
                     else:
                         lines.append(f"  - {it}")
+        # if compare_reference_task added extra reference_recommendations, include them
+        if r.get("reference_recommendations"):
+            lines.append("")
+            lines.append("### Reference recommendations")
+            for rec in r["reference_recommendations"]:
+                lines.append(f"- {rec}")
         lines.append("")
 
     lines.append("---")
@@ -706,31 +1161,28 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
 
 @task(retries=0)
 def notify_on_changes_task(results: List[Dict], slack_block_name: str = "slack-webhook-for-repo-checker") -> Dict:
-    """
-    Envoie une notification Slack via un Prefect Block si des changements sont détectés.
-    """
     logger = get_run_logger()
     changed_items = [r for r in results if r.get("changed")]
     summary = {"changed_count": len(changed_items), "sent": False}
 
     if not changed_items:
-        logger.info("No changes detected — no Slack notification sent.")
+        logger.info("No changes detected — no notification sent.")
         return summary
 
-    text_lines = ["🔔 GitHub Watcher — changements détectés:"]
+    text_lines = ["GitHub Watcher — changes detected:"]
     for r in changed_items:
         repo = r["repo"]
         branch = r["branch"]
         sha = (r.get("sha") or "")[:8]
         text_lines.append(f"- {repo}@{branch} — {sha}")
     text_lines.append("")
-    text_lines.append("📄 Voir le rapport généré dans les artifacts du flow run.")
+    text_lines.append("See the report generated in the run artifacts.")
     text = "\n".join(text_lines)
 
     try:
         slack_block_coro = SlackWebhook.load(slack_block_name)
         slack_block = run_coro_sync(slack_block_coro)
-        
+
         notify_coro = slack_block.notify(text)
         run_coro_sync(notify_coro)
 
@@ -744,65 +1196,141 @@ def notify_on_changes_task(results: List[Dict], slack_block_name: str = "slack-w
 
 @flow
 def github_repos_check_flow(
-    repos: List[str],
-    state_path: str = "github_repos_state.yml",
+    repos: List[Dict[str, Any]] = None,
+    state_path: str = "repo_watcher_state.yml",
     reco_path: str = "repo_recommendations.yml",
     parallel: bool = True,
     artifacts_dir: str = "artifacts",
-    notify_slack: bool = True,  # DEFAULT CHANGED: pas de Slack par défaut
-) -> Dict:
+    notify_slack: bool = False,
+):
+    """
+    Main flow: run per-repo checks (step 1) then reference comparisons (step 2 for repos that declare a reference_branch).
+    repos must be a list of dicts (owner, repo, working_branch, reference_branch, project optional).
+    """
     logger = get_run_logger()
 
-    # NEW: renommer le flow-run dès le début
-    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    base_name = f"github-repos-check-{ts}"
-    try:
-        async def _rename_start():
-            async with get_client() as client:
-                await client.update_flow_run(_flow_run.id, name=base_name)
-        anyio.run(_rename_start)
-    except Exception as exc:
-        logger.warning(f"Flow run rename (start) failed: {exc}")
+    repos_list = repos or []
+    if not isinstance(repos_list, list):
+        raise ValueError("repos parameter must be a list of dicts")
 
     logger.info("Starting GitHub repos checker flow (full)")
 
     results = []
+    # We'll keep mapping of check futures to their repo_spec so we can submit compare task when needed
+    futures = []  # list of tuples (check_future, repo_spec)
     if parallel:
-        futures = []
-        for repo_spec in repos:
-            # NOM DE TASK = "owner/repo@branch"
-            if "@" in repo_spec:
-                repo_part = repo_spec
+        for repo_spec in repos_list:
+            # determine a sensible task name
+            if isinstance(repo_spec, dict):
+                owner = repo_spec.get("owner")
+                repo_name = repo_spec.get("repo")
+                branch = repo_spec.get("working_branch") or ""
+                task_name = f"{owner}/{repo_name}" + (f"@{branch}" if branch else "")
+                check_future = check_single_repo_task.with_options(name=task_name).submit(f"{owner}/{repo_name}@{branch}" if branch else f"{owner}/{repo_name}", state_path, reco_path)
             else:
-                # Résoudre la branche par défaut pour le nom de task
-                try:
-                    owner, repo_name = repo_spec.split("/", 1)
-                    default_branch = get_default_branch(owner, repo_name)
-                    repo_part = f"{owner}/{repo_name}@{default_branch}"
-                except Exception:
-                    repo_part = repo_spec
-            task_runner = check_single_repo_task.with_options(name=repo_part)
-            futures.append(task_runner.submit(repo_spec, state_path, reco_path))
-        for f in futures:
-            results.append(f.result())
+                # string: pass-through
+                repo_spec_str = str(repo_spec)
+                if "@" in repo_spec_str:
+                    task_name = repo_spec_str
+                else:
+                    task_name = repo_spec_str
+                check_future = check_single_repo_task.with_options(name=task_name).submit(repo_spec_str, state_path, reco_path)
+            futures.append((check_future, repo_spec))
+        # now optionally submit compare_reference_task for those repo_specs that include a reference_branch (keep dependency)
+        compare_futures = []
+        for check_fut, repo_spec in futures:
+            # determine if repo_spec has a reference_branch
+            has_ref = False
+            if isinstance(repo_spec, dict) and repo_spec.get("reference_branch"):
+                has_ref = True
+            # also allow string format "owner/repo@working" with no reference -> skip
+            if has_ref:
+                comp_fut = compare_reference_task.submit(repo_spec, check_fut, state_path, reco_path)
+            else:
+                comp_fut = None
+            compare_futures.append((check_fut, comp_fut, repo_spec))
+        # collect results and merge compare results where present
+        for check_fut, comp_fut, repo_spec in compare_futures:
+            check_res = check_fut.result()
+            # if compare future exists, merge its results
+            if comp_fut is not None:
+                comp_res = comp_fut.result()
+                # merge events
+                if comp_res.get("reference_events"):
+                    check_res.setdefault("events", {})
+                    for k, v in comp_res.get("reference_events").items():
+                        if v:
+                            existing = check_res["events"].get(k) or []
+                            existing_keys = {json.dumps(e, sort_keys=True) for e in existing if isinstance(e, dict)}
+                            for item in v:
+                                j = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
+                                if j not in existing_keys:
+                                    existing.append(item)
+                                    existing_keys.add(j)
+                            check_res["events"][k] = existing
+                # merge recommendations
+                if comp_res.get("reference_recommendations"):
+                    check_res.setdefault("recommendations", [])
+                    for r in comp_res.get("reference_recommendations"):
+                        if r not in check_res["recommendations"]:
+                            check_res["recommendations"].append(r)
+                    # if reference produced items but original check had no changes, mark changed True
+                    if comp_res.get("reference_recommendations") and not check_res.get("changed"):
+                        check_res["changed"] = True
+                # attach reference_recommendations and artifact_key for reporting
+                if comp_res.get("reference_recommendations"):
+                    check_res["reference_recommendations"] = comp_res.get("reference_recommendations")
+                if comp_res.get("artifact_key"):
+                    check_res["reference_artifact_key"] = comp_res.get("artifact_key")
+            results.append(check_res)
     else:
-        for repo_spec in repos:
-            if "@" in repo_spec:
-                repo_part = repo_spec
+        # sequential mode
+        for repo_spec in repos_list:
+            if isinstance(repo_spec, dict):
+                owner = repo_spec.get("owner")
+                repo_name = repo_spec.get("repo")
+                branch = repo_spec.get("working_branch") or ""
+                task_name = f"{owner}/{repo_name}" + (f"@{branch}" if branch else "")
+                check_fut = check_single_repo_task.with_options(name=task_name).submit(f"{owner}/{repo_name}@{branch}" if branch else f"{owner}/{repo_name}", state_path, reco_path)
             else:
-                try:
-                    owner, repo_name = repo_spec.split("/", 1)
-                    default_branch = get_default_branch(owner, repo_name)
-                    repo_part = f"{owner}/{repo_name}@{default_branch}"
-                except Exception:
-                    repo_part = repo_spec
-            task_runner = check_single_repo_task.with_options(name=repo_part)
-            r = task_runner.submit(repo_spec, state_path, reco_path)
-            results.append(r.result())
+                repo_spec_str = str(repo_spec)
+                if "@" in repo_spec_str:
+                    task_name = repo_spec_str
+                else:
+                    task_name = repo_spec_str
+                check_fut = check_single_repo_task.with_options(name=task_name).submit(repo_spec_str, state_path, reco_path)
+            check_res = check_fut.result()
+            # if repo_spec has reference_branch, run compare (sequentially)
+            if isinstance(repo_spec, dict) and repo_spec.get("reference_branch"):
+                comp_res = compare_reference_task(repo_spec, check_res, state_path, reco_path)
+                # merge similarly
+                if comp_res.get("reference_events"):
+                    check_res.setdefault("events", {})
+                    for k, v in comp_res.get("reference_events").items():
+                        if v:
+                            existing = check_res["events"].get(k) or []
+                            existing_keys = {json.dumps(e, sort_keys=True) for e in existing if isinstance(e, dict)}
+                            for item in v:
+                                j = json.dumps(item, sort_keys=True) if isinstance(item, dict) else str(item)
+                                if j not in existing_keys:
+                                    existing.append(item)
+                                    existing_keys.add(j)
+                            check_res["events"][k] = existing
+                if comp_res.get("reference_recommendations"):
+                    check_res.setdefault("recommendations", [])
+                    for r in comp_res.get("reference_recommendations"):
+                        if r not in check_res["recommendations"]:
+                            check_res["recommendations"].append(r)
+                    if comp_res.get("reference_recommendations") and not check_res.get("changed"):
+                        check_res["changed"] = True
+                if comp_res.get("reference_recommendations"):
+                    check_res["reference_recommendations"] = comp_res.get("reference_recommendations")
+                if comp_res.get("artifact_key"):
+                    check_res["reference_artifact_key"] = comp_res.get("artifact_key")
+            results.append(check_res)
 
     report_path = build_and_save_report(results, artifacts_dir=artifacts_dir)
 
-    # OPTIONNEL (désactivé par défaut)
     notify_summary = {}
     if notify_slack:
         notify_summary = notify_on_changes_task(results)
@@ -813,23 +1341,12 @@ def github_repos_check_flow(
     logger.info(f"Checked {len(results)} repos — changes: {changed_count}")
     logger.info(f"Report written to: {report_path}")
 
-    # NEW: renommer le flow-run en fin d’exécution pour faciliter une Automation
-    try:
-        suffix = f"changes-{changed_count}" if changed_count > 0 else "nochange"
-        final_name = f"{base_name}-{suffix}"
-        async def _rename_end():
-            async with get_client() as client:
-                await client.update_flow_run(_flow_run.id, name=final_name)
-        anyio.run(_rename_end)
-    except Exception as exc:
-        logger.warning(f"Flow run rename (end) failed: {exc}")
-
     return {
         "results": results,
         "report_path": report_path,
         "notify": notify_summary,
-        "changed_count": changed_count,          # <- utile pour Automation basée sur le résultat
-        "changed_repos": [f"{r['repo']}@{r['branch']}" for r in changed],
+        "changed_count": changed_count,          # <- useful for Automations
+        "changed_repos": [f"{r['repo']}@{r.get('branch')}" for r in changed],
     }
 
 
@@ -838,48 +1355,63 @@ def github_repos_check_flow(
 # ---------------------------
 EXAMPLE_REC_YAML = """
 globals:
-  - "Note globale: vérifier les modules dépendants si l'interface a changé."
+  - "Global note: check downstream modules if interface changed."
 repos:
   alaupin-ipsl/WCRP-universe:
     branches:
       main:
         events:
           collection_created:
-            - "Nouvelle DataDescriptor (collection) détectée : {collection} dans {repo}@{branch}."
-            - "Action recommandée : vérifier métadonnées et lancer ingestion si nécessaire."
+            - "New DataDescriptor (collection) detected: {collection} in {repo}@{branch}."
+            - "Action: check metadata and trigger ingestion if needed."
           term_created:
-            - "Nouveau terme '{term}' ajouté dans {collection} — vérifier schéma JSON et mapping."
+            - "New term '{term}' added in {collection} — verify JSON schema and mapping."
           term_modified:
-            - "Terme '{term}' modifié dans {collection} — vérifier breaking changes et changelog."
+            - "Term '{term}' modified in {collection} — check breaking changes & changelog."
   alaupin-ipsl/CORDEX-CMIP6_CVs:
     branches:
       main:
         events:
           term_created:
-            - "Nouveau terme CV : {term} → mettre à jour index & catalogue."
+            - "New CV term: {term} → update index & catalogue."
           term_modified:
-            - "Modification de terme CV : {term} → vérifier impact sur les requêtes."
+            - "CV term modified: {term} → check query impact."
 """
 
 
 if __name__ == "__main__":
-    # Demo (modifie la liste ci-dessous pour tester localement)
-    demo_repos = [
-        # format: owner/repo[@branch]
-        "alaupin-ipsl/CORDEX-CMIP6_CVs@main",
-        "WCRP-CMIP/WCRP-universe@esgvoc_dev",
-        "ltroussellier/test_new_CV@esgvoc",
-        "ltroussellier/obs4MIPs_CVs@REF",
-        "WCRP-CMIP/CMIP6Plus_CVs@esgvoc",
-        "WCRP-CMIP/CMIP6_CVs@esgvoc",
-        "WCRP-CMIP/CMIP7_CVs@esgvoc"
-    ]
+    # Main entry: read repos_config.yml (mandatory) and run the flow with the list of dicts.
+    repo_cfg_path = Path("repos_config.yml")
+    if not repo_cfg_path.exists():
+        # Write an example config and exit so the user edits it.
+        example = {
+            "repos": [
+                {"owner": "alaupin-ipsl", "repo": "CORDEX-CMIP6_CVs", "working_branch": "main", "reference_branch": None, "project": "CORDEX-CMIP6"},
+                {"owner": "WCRP-CMIP", "repo": "WCRP-universe", "working_branch": "esgvoc_dev", "reference_branch": None, "project": None},
+                {"owner": "ltroussellier", "repo": "test_new_CV", "working_branch": "esgvoc", "reference_branch": "main", "project": "input4MIPs"},
+                {"owner": "ltroussellier", "repo": "obs4MIPs_CVs", "working_branch": "REF", "reference_branch": "main", "project": "obs4MIPs"},
+                {"owner": "WCRP-CMIP", "repo": "CMIP6Plus_CVs", "working_branch": "esgvoc", "reference_branch": "main", "project": "CMIP6Plus"},
+                {"owner": "WCRP-CMIP", "repo": "CMIP6_CVs", "working_branch": "esgvoc", "reference_branch": "main", "project": "CMIP6"},
+                # {"owner": "WCRP-CMIP", "repo": "CMIP7_CVs", "working_branch": "esgvoc", "reference_branch": "main", "project": "CMIP7"},
+            ]
+        }
+        write_yaml(repo_cfg_path, example)
+        print(f"Wrote example repo config to {repo_cfg_path}. Please edit it and re-run.")
+        raise SystemExit(0)
 
+    cfg = read_yaml(repo_cfg_path) or {}
+    repos_cfg = cfg.get("repos")
+    if not isinstance(repos_cfg, list) or len(repos_cfg) == 0:
+        raise SystemExit(f"{repo_cfg_path} must contain a top-level 'repos' list of dicts")
+
+    # load recommendations example if missing
     rec_path = Path("repo_recommendations.yml")
     if not rec_path.exists():
         write_yaml(rec_path, yaml.safe_load(EXAMPLE_REC_YAML))
         print(f"Wrote example recommendations to {rec_path}")
 
     state_path = "repo_watcher_state.yml"
-    out = github_repos_check_flow(demo_repos, state_path=state_path, reco_path=str(rec_path), parallel=True, notify_slack=True)
-    print(json.dumps(out, indent=2, ensure_ascii=False))
+
+    # run flow with the list of dicts read from repos_config.yml
+    out = github_repos_check_flow(repos_cfg, state_path=state_path, reco_path=str(rec_path), parallel=True, notify_slack=False)
+    # print(json.dumps(out, indent=2, ensure_ascii=False))
