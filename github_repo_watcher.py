@@ -452,13 +452,16 @@ def check_reference_consistency_minimal(
     """
     Generic consistency check between reference_branch and working_branch.
 
-    - Fetch reference commit sha and tree (robust).
     - Scan the reference branch root for files matching "PROJECT_<collection>.json".
       If `project` is provided, only files whose PROJECT matches (case-insensitive)
       are considered. If project is None, accept any PROJECT.
-    - For each such file, read the JSON and find the dict named after the collection key.
-      We try a case-insensitive lookup for the collection key inside the JSON.
-    - For each term in that dict, expect working branch file: "<collection>/<term.lower()>.json"
+    - For each such file, read the JSON and find the dict named after the collection key
+      (case-insensitive lookup). For each key inside that dict, expect working branch file:
+        "<collection>/<term_filename>"
+      where term_filename is matched case-insensitively against files present.
+    - Special-case: skip checking collections named "DRS" and "license".
+    - Accept ID matches case-insensitively (actual_id.lower() == expected.lower()) to tolerate
+      mixed-case ids (e.g. "1hrCM" vs "1hrcm").
     - Returns events dict with:
         - reference_term_missing
         - reference_term_mismatch
@@ -470,14 +473,13 @@ def check_reference_consistency_minimal(
         "reference_file_parse_error": [],
     }
 
-    # --- get reference tree robustly using commit SHA for the branch ---
+    # fetch reference root files (fail-fast on error so user gets alerted)
     try:
-        ref_commit = get_latest_commit_on_branch(owner, repo_name, reference_branch)
-        ref_sha = ref_commit.get("sha")
-        ref_tree = get_tree_index(owner, repo_name, ref_sha) if ref_sha else {}
+        ref_tree = get_tree_index(owner, repo_name, reference_branch)
         ref_root_files = ref_tree.get(".", []) or []
-    except Exception:
-        ref_root_files = []
+    except Exception as exc:
+        # fail fast so the Prefect task fails and you are alerted
+        raise RuntimeError(f"Could not fetch reference tree for {owner}/{repo_name}@{reference_branch}: {exc}")
 
     # prepare working index mapping (dir -> set(files))
     working_index = new_index or {}
@@ -488,7 +490,7 @@ def check_reference_consistency_minimal(
     # pattern PROJECT_collection.json -> capture project and collection
     pattern = re.compile(r"^([A-Za-z0-9\-_]+)_([A-Za-z0-9_]+)\.json$", flags=re.IGNORECASE)
 
-    # helper to fetch contents of a file at a given ref (branch or sha)
+    # helper to fetch contents of a file at a given ref (branch)
     def _fetch_contents(path: str, ref: str):
         try:
             url = f"{GITHUB_API_BASE}/repos/{owner}/{repo_name}/contents/{path}"
@@ -504,18 +506,24 @@ def check_reference_consistency_minimal(
         except Exception:
             return None
 
+    # collections to skip (case-insensitive)
+    skip_collections = {"drs", "license"}
+
     # iterate reference root files that match PROJECT_collection.json
     for af in ref_root_files:
-        m = pattern.match(af)
+        m: re.Match[str] | None = pattern.match(af)
         if not m:
             continue
         ref_project = m.group(1)
-        collection_key = m.group(2)  # e.g. "activity_id" or "sub_experiment_id"
+        collection_key_from_filename = m.group(2)  # e.g. "activity_id" or "sub_experiment_id"
 
-        # if a project is provided, skip files whose project doesn't match
-        if project:
-            if ref_project.lower() != project.lower():
-                continue
+        # skip known special files
+        if collection_key_from_filename.lower() in skip_collections:
+            continue
+
+        # if a project is provided, skip files whose project doesn't match (case-insensitive)
+        if project and ref_project.lower() != project.lower():
+            continue
 
         # fetch and parse the reference file
         content = _fetch_contents(af, reference_branch)
@@ -523,7 +531,7 @@ def check_reference_consistency_minimal(
             events["reference_file_parse_error"].append({
                 "file": af,
                 "reason": "could not fetch content",
-                "collection": collection_key,
+                "collection": collection_key_from_filename,
             })
             continue
         try:
@@ -532,61 +540,68 @@ def check_reference_consistency_minimal(
             events["reference_file_parse_error"].append({
                 "file": af,
                 "reason": f"json parse error: {exc}",
-                "collection": collection_key,
+                "collection": collection_key_from_filename,
             })
             continue
 
-        # --- robust: find the collection dict with a case-insensitive key match ---
+        # case-insensitive lookup for the collection key inside the reference JSON
         collection_root = None
+        collection_key_used = None
         if isinstance(ref_json, dict):
-            # direct match
-            if collection_key in ref_json and isinstance(ref_json[collection_key], dict):
-                collection_root = ref_json[collection_key]
+            # exact match first
+            if collection_key_from_filename in ref_json:
+                collection_root = ref_json[collection_key_from_filename]
+                collection_key_used = collection_key_from_filename
             else:
-                # case-insensitive fallback: find key whose lower() equals collection_key.lower()
-                for k, v in ref_json.items():
-                    if k.lower() == collection_key.lower() and isinstance(v, dict):
-                        collection_root = v
+                for k in ref_json.keys():
+                    if k.lower() == collection_key_from_filename.lower():
+                        collection_root = ref_json[k]
+                        collection_key_used = k
                         break
 
-        if not collection_root:
+        if not collection_root or not isinstance(collection_root, dict):
+            # provide helpful diagnostic: show available keys (case-insensitive lookup performed)
+            available = None
+            if isinstance(ref_json, dict):
+                available = ", ".join(list(ref_json.keys())[:10])  # limit length
             events["reference_file_parse_error"].append({
                 "file": af,
-                "reason": f"no '{collection_key}' dict found (case-insensitive lookup performed)",
-                "collection": collection_key,
+                "reason": f"no '{collection_key_from_filename}' dict found (case-insensitive lookup performed). Available top-level keys: {available}",
+                "collection": collection_key_from_filename,
             })
             continue
 
         # for each term in the reference collection, expect working file at: collection_key/<term_lower>.json
         for term_key in collection_root.keys():
-            expected_filename = f"{term_key.lower()}.json"
-            expected_path = f"{collection_key}/{expected_filename}"
+            # expected filename (we will match filenames case-insensitively)
+            expected_filename = f"{term_key}.json"
+            expected_filename_lower = expected_filename.lower()
+            expected_path_log = f"{collection_key_from_filename}/{term_key.lower()}.json"
 
-            # find collection directory in working tree ignoring case
+            # find matching directory in working branch (case-insensitive)
             matched_dir = None
             for d in dir_map.keys():
-                if d.lower() == collection_key.lower():
+                if d.lower() == collection_key_from_filename.lower():
                     matched_dir = d
                     break
 
-            found = False
             found_path = None
-            actual_filename = None
-
+            found_filename_actual = None
             if matched_dir:
-                # look for a file in that directory matching expected_filename case-insensitively
-                candidates = [f for f in dir_map.get(matched_dir, set()) if f.lower() == expected_filename.lower()]
-                if candidates:
-                    actual_filename = candidates[0]  # choose first match
-                    found_path = f"{matched_dir}/{actual_filename}"
-                    found = True
+                # search for filename case-insensitively in the matched dir
+                for fname in dir_map.get(matched_dir, set()):
+                    if fname.lower() == expected_filename_lower:
+                        found_filename_actual = fname
+                        found_path = f"{matched_dir}/{fname}"
+                        break
 
-            if not found:
+            if not found_path:
+                # not found -> register missing
                 events["reference_term_missing"].append({
                     "file": af,
-                    "expected": expected_path,
+                    "expected": expected_path_log,
                     "key": term_key,
-                    "collection": collection_key,
+                    "collection": collection_key_from_filename,
                 })
                 continue
 
@@ -597,7 +612,7 @@ def check_reference_consistency_minimal(
                     "file": found_path,
                     "reason": "could not fetch working file",
                     "key": term_key,
-                    "collection": collection_key,
+                    "collection": collection_key_from_filename,
                 })
                 continue
 
@@ -608,53 +623,31 @@ def check_reference_consistency_minimal(
                     "file": found_path,
                     "reason": f"json parse error: {exc}",
                     "key": term_key,
-                    "collection": collection_key,
+                    "collection": collection_key_from_filename,
                 })
                 continue
 
+            # ID check: accept case-insensitive match between expected and actual
             expected_id = term_key.lower()
             actual_id = wj.get("id") if isinstance(wj, dict) else None
-
-            # compare IDs case-insensitively, but note when case differs
-            if actual_id is None:
-                events["reference_term_mismatch"].append({
-                    "file": found_path,
-                    "key": term_key,
-                    "reason": "missing 'id' field",
-                    "collection": collection_key,
-                })
-                continue
-
-            if actual_id.lower() != expected_id.lower():
+            if not isinstance(actual_id, str) or actual_id.lower() != expected_id:
                 events["reference_term_mismatch"].append({
                     "file": found_path,
                     "key": term_key,
                     "expected_id": expected_id,
                     "actual_id": actual_id,
-                    "collection": collection_key,
+                    "collection": collection_key_from_filename,
                 })
                 continue
 
-            # optional: record a warning if filename case differs from expected (for maintainers)
-            if actual_filename is not None and actual_filename != expected_filename:
-                # treat as valid but warn (we put it under mismatch with reason 'case difference')
-                events["reference_term_mismatch"].append({
-                    "file": found_path,
-                    "key": term_key,
-                    "reason": "filename case differs from expected",
-                    "expected_filename": expected_filename,
-                    "actual_filename": actual_filename,
-                    "collection": collection_key,
-                })
-
-            # check 'type' presence
+            # TYPE presence check (still strict)
             actual_type = wj.get("type")
             if not isinstance(actual_type, str) or not actual_type:
                 events["reference_term_mismatch"].append({
                     "file": found_path,
                     "key": term_key,
                     "reason": "missing or invalid 'type' field",
-                    "collection": collection_key,
+                    "collection": collection_key_from_filename,
                 })
 
     return events
@@ -970,24 +963,16 @@ def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, stat
 
     logger.info(f"Compare reference for {repo_key}: working={working_branch}, reference={reference_branch}")
 
-    # try to reuse files_index from check_result to avoid extra API calls
-    new_index = None
+    # fetch tree index for working branch (if fails, we continue but will log/record issues)
     try:
-        new_index = check_result.get("files_index")
-    except Exception:
-        new_index = None
+        latest = get_latest_commit_on_branch(owner, repo_name, working_branch)
+        working_sha = latest.get("sha")
+        new_index = get_tree_index(owner, repo_name, working_sha)
+    except Exception as exc:
+        logger.warning(f"Could not fetch working tree for {repo_key}@{working_branch}: {exc}")
+        new_index = {}
 
-    # if not available, fetch working tree index (last resort)
-    if new_index is None:
-        try:
-            latest = get_latest_commit_on_branch(owner, repo_name, working_branch)
-            working_sha = latest.get("sha")
-            new_index = get_tree_index(owner, repo_name, working_sha)
-        except Exception as exc:
-            # fail fast: cannot continue reference comparison without a working tree index
-            raise RuntimeError(f"Could not obtain working tree index for {owner}/{repo_name} (working={working_branch}). Underlying error: {exc}")
-
-    # run minimal consistency check (project-aware)
+    # run minimal consistency check; this will raise if reference tree fetch fails (fail-fast)
     ref_events = check_reference_consistency_minimal(owner, repo_name, working_branch, reference_branch, new_index, project=project)
 
     # build recommendations from ref_events using templates
@@ -1019,11 +1004,11 @@ def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, stat
     if any_issues:
         rec_lines.append("Auto: Reference consistency issues detected between working and reference branches.")
 
-    # build markdown artifact for this reference check
+    # build markdown artifact for this reference check (group by collection)
     ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
     safe_branch = re.sub(r"[^a-z0-9-]", "-", (working_branch or "").lower())
-    raw_key = f"refcheck-{owner}-{repo_name}-{safe_branch}-{ts_short}"
-    artifact_key = re.sub(r"[^a-z0-9-]", "-", raw_key.lower())
+    artifact_key_raw = f"repo-{owner}-{repo_name}-refcheck-{safe_branch}-{ts_short}"
+    artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
 
     md_lines = [
         f"# Reference coherence check — {owner}/{repo_name}",
@@ -1034,11 +1019,11 @@ def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, stat
         "",
     ]
 
-    issues = any(ref_events.get(k) for k in ref_events)
+    issues = any_issues
     md_lines.append(f"- issues found: {bool(issues)}")
     md_lines.append("")
 
-    # group and print per-collection for readability
+    # group and print per-collection for readability (collection heading uses the collection value from events)
     from collections import defaultdict
     grouped_missing = defaultdict(list)
     grouped_mismatch = defaultdict(list)
@@ -1079,9 +1064,9 @@ def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, stat
 
     md_content = "\n".join(md_lines)
 
-    # try to publish artifact and also write a local summary
     try:
         create_markdown_artifact(markdown=md_content, key=artifact_key, description=f"Reference check for {owner}/{repo_name}")
+        # also write a local copy for convenience
         ref_report_path = Path("artifacts") / f"refcheck_{owner}_{repo_name}_{ts_short}.md"
         ref_report_path.parent.mkdir(parents=True, exist_ok=True)
         ref_report_path.write_text(md_content, encoding="utf-8")
