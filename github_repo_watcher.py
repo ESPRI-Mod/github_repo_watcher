@@ -490,6 +490,15 @@ def check_reference_consistency_minimal(
         "reference_file_parse_error": [],
     }
 
+    print(
+"owner=", owner,
+"repo_name=", repo_name,
+"working_branch=", working_branch,
+"reference_branch=", reference_branch,
+"new_index=", new_index,
+"project=", project,
+)
+
     # fetch reference root files (fail-fast on error so user gets alerted)
     try:
         # get_tree_index now resolves branch->sha internally, but pass the branch name
@@ -506,7 +515,7 @@ def check_reference_consistency_minimal(
         dir_map[d] = set(files or [])
 
     # pattern PROJECT_collection.json -> capture project and collection
-    pattern = re.compile(r"^([A-Za-z0-9\-_]+)_([A-Za-z0-9_]+)\.json$", flags=re.IGNORECASE)
+    pattern = re.compile(r"^(.+?)_([A-Za-z0-9_]+)\.json$", flags=re.IGNORECASE)
 
     # helper to fetch contents of a file at a given ref (branch or sha)
     def _fetch_contents(path: str, ref: str):
@@ -588,7 +597,7 @@ def check_reference_consistency_minimal(
                 "collection": collection_key_from_filename,
             })
             continue
-
+        
         # for each term in the reference collection, expect working file at: collection_key/<term_lower>.json
         for term_key in collection_root.keys():
             # expected filename (we will match filenames case-insensitively)
@@ -1341,8 +1350,8 @@ repos:
 
 if __name__ == "__main__":
     # Main entry: read repos_config.yml (mandatory) and run the flow with the list of dicts.
-    repo_cfg_path = Path("repos_config.yml")
-    if not repo_cfg_path.exists():
+    repo_config_path = Path("repos_config.yml")
+    if not repo_config_path.exists():
         # Write an example config and exit so the user edits it.
         example = {
             "repos": [
@@ -1355,14 +1364,14 @@ if __name__ == "__main__":
                 # {"owner": "WCRP-CMIP", "repo": "CMIP7_CVs", "working_branch": "esgvoc", "reference_branch": "main", "project": "CMIP7"},
             ]
         }
-        write_yaml(repo_cfg_path, example)
-        print(f"Wrote example repo config to {repo_cfg_path}. Please edit it and re-run.")
+        write_yaml(repo_config_path, example)
+        print(f"Wrote example repo config to {repo_config_path}. Please edit it and re-run.")
         raise SystemExit(0)
 
-    cfg = read_yaml(repo_cfg_path) or {}
+    cfg = read_yaml(repo_config_path) or {}
     repos_cfg = cfg.get("repos")
     if not isinstance(repos_cfg, list) or len(repos_cfg) == 0:
-        raise SystemExit(f"{repo_cfg_path} must contain a top-level 'repos' list of dicts")
+        raise SystemExit(f"{repo_config_path} must contain a top-level 'repos' list of dicts")
 
     # load recommendations example if missing
     rec_path = Path("repo_recommendations.yml")
