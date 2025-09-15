@@ -752,7 +752,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         # Artifact Prefect (no local file)
         ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
         safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
-        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}"
         artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
         md_content = "\n".join([
             f"# Repo check — {repo_key}@{branch}",
@@ -791,7 +791,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
         # Artifact Prefect minimal (no local file)
         ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
         safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
-        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+        artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}"
         artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
         md_content = "\n".join([
             f"# Repo check — {repo_key}@{branch}",
@@ -902,7 +902,7 @@ def check_single_repo_task(repo_with_branch: str, state_path: str, reco_path: st
     # Artifact Prefect (no local file)
     ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
     safe_branch = re.sub(r"[^a-z0-9-]", "-", branch.lower())
-    artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}-{ts_short}"
+    artifact_key_raw = f"repo-{owner}-{repo_name}-{safe_branch}"
     artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
 
     md_lines = [
@@ -1038,7 +1038,7 @@ def compare_reference_task(repo_spec: Union[str, Dict], check_result: Dict, stat
     # build markdown artifact for this reference check (group by collection)
     ts_short = datetime.now(timezone.utc).strftime("%Y%m%d")
     safe_branch = re.sub(r"[^a-z0-9-]", "-", (working_branch or "").lower())
-    artifact_key_raw = f"repo-{owner}-{repo_name}-refcheck-{safe_branch}-{ts_short}"
+    artifact_key_raw = f"repo-{owner}-{repo_name}-refcheck-{safe_branch}"
     artifact_key = re.sub(r"[^a-z0-9-]", "-", artifact_key_raw.lower())
 
     md_lines = [
@@ -1171,6 +1171,8 @@ def build_and_save_report(results: List[Dict], artifacts_dir: str = "artifacts")
 
     md_content = "\n".join(lines)
     md_path.write_text(md_content, encoding="utf-8")
+
+    create_markdown_artifact(markdown=md_content, key="repo-check-recap", description="Repo recap")
 
     return str(md_path)
 
