@@ -1,5 +1,5 @@
 globals:
-  - "Note globale: vérifier les modules dépendants si l'interface a changé."
+  - "Note globale: vérifier les CVs de projets si quelque chose a changé."
   - "Rappel: exécuter les tests d'intégration et vérifier l'état des pipelines CI."
 
 repos:
@@ -7,19 +7,76 @@ repos:
     WCRP-universe:
       esgvoc_dev:
         collection_created:
-          - "Nouvelle DataDescriptor (collection) détectée : {collection} dans {repo}@{branch}."
-          - "Action recommandée : vérifier métadonnées et lancer ingestion si nécessaire."
+          - "Nouveaux DataDescriptor détectée : {collection} dans {repo}@{branch}."
+          - "Action recommandée : vérifier métadonnées et lancer ingestion si nécessaire (nécessite pydantic model in esgvoc + mapping dans __init__.py . "
         term_created:
-          - "Nouveau terme '{term}' ajouté dans {collection} — vérifier schéma JSON et mapping."
+          - "Nouveau terme '{term}' ajouté dans {collection} — vérifier schéma JSON et mapping. test ?"
         term_modified:
-          - "Terme '{term}' modifié dans {collection} — vérifier breaking changes et changelog."
+          - "Terme '{term}' modifié dans {collection} — vérifier que bien lu par esgvoc."
         term_removed:
-          - "Terme '{term}' supprimé de {collection} — vérifier consommations et compatibilité."
+          - "Terme '{term}' supprimé de {collection} — n'est pas sencé arriver, sûr ? si oui tester tous les CVs de projets pour être certain qu'aucun ne referencait ce term"
     CORDEX-CMIP6_CVs:
       main:
         collection_created:
           - "Nouvelle collection CV détectée : {collection}."
         term_created:
-          - "Nouveau terme CV : {term} → mettre à jour index & catalogue."
+          - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
         term_modified:
-          - "Modification de terme CV : {term} → vérifier impact sur les requêtes."
+          - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+
+  WCRP-CMIP:
+      CMIP6_CVs:
+        esgvoc:
+         collection_created:
+           - "Nouvelle collection CV détectée : {collection}."
+         term_created:
+           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
+         term_modified:
+           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+      CMIP6Plus_CVs:
+        esgvoc:
+         collection_created:
+           - "Nouvelle collection CV détectée : {collection}."
+         term_created:
+           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
+         term_modified:
+           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+      CMIP7-CVs:
+        esgvoc:
+         collection_created:
+           - "Nouvelle collection CV détectée : {collection}."
+         term_created:
+           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
+         term_modified:
+           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+  PCMDI:
+      input4MIPs_CVs:
+        esgvoc:
+         collection_created:
+           - "Nouvelle collection CV détectée : {collection}."
+         term_created:
+           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
+         term_modified:
+           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+
+  Climate-REF:
+      Obs4REF_CVs:
+        main:
+         collection_created:
+           - "Nouvelle collection CV détectée : {collection}."
+         term_created:
+           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
+         term_modified:
+           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+
+  WCRP-CORDEX:
+      cordex-cmip6-cv:
+        esgvoc:
+         collection_created:
+           - "Nouvelle collection CV détectée : {collection}."
+         term_created:
+           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
+         term_modified:
+           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
+
+
