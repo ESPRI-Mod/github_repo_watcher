@@ -1,18 +1,18 @@
 repos:
-  - owner: alaupin-ipsl
-    repo: CORDEX-CMIP6_CVs
-    working_branch: main
-    reference_branch: null
+  - owner: WCRP-CORDEX
+    repo: cordex-cmip6-cv
+    working_branch: esgvoc
+    reference_branch: main
     project: CORDEX-CMIP6
   - owner: WCRP-CMIP
     repo: WCRP-universe
     working_branch: esgvoc_dev
     reference_branch: null
     project: null
-  - owner: ltroussellier
-    repo: test_new_CV
+  - owner: PCMDI
+    repo: input4MIPs_CVs
     working_branch: esgvoc
-    reference_branch: master
+    reference_branch: main
     project: input4MIPs
   - owner: ltroussellier
     repo: obs4MIPs_CVs
@@ -29,3 +29,8 @@ repos:
     working_branch: esgvoc
     reference_branch: main
     project: CMIP6
+  - owner: WCRP-CMIP
+    repo: Variable-Registry
+    working_branch: main
+    reference_branch: null
+    project: Variable-Registry
