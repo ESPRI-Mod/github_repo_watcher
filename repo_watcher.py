@@ -26,6 +26,12 @@ def read_yaml(path: Path) -> dict | None:
         return yaml.safe_load(file)
 
 
+def write_yaml(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+
+
 def github_get(url: str, params: dict = None) -> requests.Response:
     try:
         r = requests.get(url, headers=HEADERS, params=params or {}, timeout=HTTP_TIMEOUT)
@@ -241,12 +247,11 @@ def repo_check_single(
 
     state = read_yaml(state_path) or {}
     repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch) or None
-    reco = (read_yaml(reco_path) or {}).get("repos", {}) or {}
+    reco = (read_yaml(reco_path) or {}).get("globals", {}) or {}
 
     try:
         latest = get_latest_commit(owner, repo_name, working_branch)
     except Exception as exc:
-        # return a string, not a set / division
         return {
             "repo": f"{owner}/{repo_name}@{working_branch}",
             "error": f"Failed to fetch commits: {exc}",
@@ -281,6 +286,9 @@ def repo_check_single(
             "files_index": new_index,
         }
 
+        write_yaml(state_path, state)
+        repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch)
+
         print(
             f"Initial state recorded for {owner}/{repo_name} on branch {working_branch} at {date_now}. Commit SHA: {sha} published at {date_now.strftime("%Y-%m-%d %H:%m:%s")}."
         )
@@ -296,10 +304,14 @@ def repo_check_single(
         events = classify_files_events(files_changed, prev_index, new_index)
 
         rec_lines = []
+        if project == "universe":
+            recommendation_type = "universe"
+        else:
+            recommendation_type = "vocab"
         for event_type, event_list in events.items():
             if not event_list:
                 continue
-            templates = collect_templates_for_event(reco.get("repos", {}), owner, repo_name, working_branch, event_type)
+            templates = (reco.get(recommendation_type) or {}).get(event_type, [])
             for occ in event_list:
                 context_ev = {
                     "repo": repo_name,
@@ -332,19 +344,29 @@ def repo_check_single(
                 if not items:
                     continue
                 artifact_message.append(f"- {event_type}:")
-                for it in items:
-                    if isinstance(it, dict):
-                        col = it.get("collection")
-                        term = it.get("term")
+                for item in items:
+                    if isinstance(item, dict):
+                        collection = item.get("collection")
+                        path = item.get("path")
                         if event_type in ("collection_created", "collection_removed"):
-                            artifact_message.append(f"  - {col}")
+                            artifact_message.append(f"  - {collection}")
                         else:
-                            artifact_message.append(f"  - {term}")
+                            artifact_message.append(f"  - {path}")
                     else:
-                        artifact_message.append(f"  - {it}")
+                        artifact_message.append(f"  - {item}")
             artifact_message.append("")
 
         artifact_message = "\n".join(artifact_message)
+
+        state.setdefault(owner, {}).setdefault(repo_name, {})[working_branch] = {
+            "sha": sha,
+            "date": date,
+            "checked_at": date_now.isoformat(),
+            "files_index": new_index,
+        }
+
+        write_yaml(state_path, state)
+        repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch)
 
     artifact_name = (
         f"repo-{owner}-{repo_name}-{working_branch}"
@@ -423,7 +445,13 @@ def repos_check_flow(
         futures.append(check_future)
     
     for future in futures:
-        results.append(future.result())
+        if hasattr(future, "result"):
+            try:
+                results.append(future.result())
+            except Exception as e:
+                results.append({"error": f"Failed to obtain task result: {e}"})
+        else:
+            results.append(future)
 
     build_report(results)
 
