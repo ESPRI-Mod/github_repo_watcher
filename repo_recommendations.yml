@@ -1,82 +1,18 @@
 globals:
-  - "Note globale: vérifier les CVs de projets si quelque chose a changé."
-  - "Rappel: exécuter les tests d'intégration et vérifier l'état des pipelines CI."
-
-repos:
-  alaupin-ipsl:
-    WCRP-universe:
-      esgvoc_dev:
-        collection_created:
-          - "Nouveaux DataDescriptor détectée : {collection} dans {repo}@{branch}."
-          - "Action recommandée : vérifier métadonnées et lancer ingestion si nécessaire (nécessite pydantic model in esgvoc + mapping dans __init__.py . "
-        term_created:
-          - "Nouveau terme '{term}' ajouté dans {collection} — vérifier schéma JSON et mapping. test ?"
-        term_modified:
-          - "Terme '{term}' modifié dans {collection} — vérifier que bien lu par esgvoc."
-        term_removed:
-          - "Terme '{term}' supprimé de {collection} — n'est pas sencé arriver, sûr ? si oui tester tous les CVs de projets pour être certain qu'aucun ne referencait ce term"
-    CORDEX-CMIP6_CVs:
-      main:
-        collection_created:
-          - "Nouvelle collection CV détectée : {collection}."
-        term_created:
-          - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-        term_modified:
-          - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-
-  WCRP-CMIP:
-      CMIP6_CVs:
-        esgvoc:
-         collection_created:
-           - "Nouvelle collection CV détectée : {collection}."
-         term_created:
-           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-         term_modified:
-           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-      CMIP6Plus_CVs:
-        esgvoc:
-         collection_created:
-           - "Nouvelle collection CV détectée : {collection}."
-         term_created:
-           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-         term_modified:
-           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-      CMIP7-CVs:
-        esgvoc:
-         collection_created:
-           - "Nouvelle collection CV détectée : {collection}."
-         term_created:
-           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-         term_modified:
-           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-  PCMDI:
-      input4MIPs_CVs:
-        esgvoc:
-         collection_created:
-           - "Nouvelle collection CV détectée : {collection}."
-         term_created:
-           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-         term_modified:
-           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-
-  Climate-REF:
-      Obs4REF_CVs:
-        main:
-         collection_created:
-           - "Nouvelle collection CV détectée : {collection}."
-         term_created:
-           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-         term_modified:
-           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-
-  WCRP-CORDEX:
-      cordex-cmip6-cv:
-        esgvoc:
-         collection_created:
-           - "Nouvelle collection CV détectée : {collection}."
-         term_created:
-           - "Nouveau terme CV : {term} → tester si ce term est bien lu par esgvoc."
-         term_modified:
-           - "Modification de terme CV : {term} → vérifier si ce term est bien lu par esgvoc."
-
-
+  vocab:
+    collection_created:
+      - "Nouvelle collection CV détectée : {collection}."
+    term_created:
+      - "Nouveau terme CV : {path} → tester si ce term est bien lu par esgvoc."
+    term_modified:
+      - "Modification de terme CV : {path} → vérifier si ce term est bien lu par esgvoc."
+  universe:
+    collection_created:
+      - "Nouveaux DataDescriptor détectée : {collection} dans {repo}@{branch}."
+      - "Action recommandée : vérifier métadonnées et lancer ingestion si nécessaire (nécessite pydantic model in esgvoc + mapping dans __init__.py . "
+    term_created:
+      - "Nouveau terme '{path}' ajouté dans {collection} — vérifier schéma JSON et mapping. test ?"
+    term_modified:
+      - "Terme '{path}' modifié dans {collection} — vérifier que bien lu par esgvoc."
+    term_removed:
+      - "Terme '{path}' supprimé de {collection} — n'est pas sencé arriver, sûr ? si oui tester tous les CVs de projets pour être certain qu'aucun ne referencait ce term"
