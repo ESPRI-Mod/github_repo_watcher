@@ -301,7 +301,7 @@ def repo_check_single(
         repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch)
 
         print(
-            f"Initial state recorded for {owner}/{repo_name} on branch {working_branch} at {date_now}. Commit SHA: {sha} published at {date_now.strftime("%Y-%m-%d %H:%m:%s")}."
+            f"Initial state recorded for {owner}/{repo_name} on branch {working_branch} at {date_now}. Commit SHA: {sha} published at {date_now.strftime('%Y-%m-%d %H:%m:%s')}."
         )
 
         artifact_message = f"🟣 Initial check completed. Latest commit: {sha} at {date}."
