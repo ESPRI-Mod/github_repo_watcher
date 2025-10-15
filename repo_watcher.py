@@ -8,6 +8,7 @@ from typing import Any
 import requests
 import yaml
 from collections import defaultdict
+from git import Repo, GitCommandError
 
 from prefect.artifacts import create_markdown_artifact
 from prefect import flow, task, runtime
@@ -16,11 +17,12 @@ from prefect.states import Cancelled
 
 
 GITHUB_API_BASE = "https://api.github.com"
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-HEADERS = {"Accept": "application/vnd.github+json"}
-if GITHUB_TOKEN:
-    HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
-HTTP_TIMEOUT = 30
+# GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+# HEADERS = {"Accept": "application/vnd.github+json"}
+# if GITHUB_TOKEN:
+#     HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+# HTTP_TIMEOUT = 30
+REPOS_BASE = Path("repos_cache")
 
 
 def read_yaml(path: Path) -> dict | None:
@@ -37,60 +39,114 @@ def write_yaml(path: Path, data: dict) -> None:
         yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
 
 
-def github_get(url: str, params: dict = None) -> requests.Response:
+def _repo_path(owner: str, repo: str) -> Path:
+    """Construit le chemin local du dépôt."""
+    return REPOS_BASE / f"{owner}__{repo}"
+
+
+def get_or_clone_repo(owner: str, repo: str, remote_url: str | None = None) -> Repo:
+    """
+    Ouvre un dépôt local s'il existe, sinon le clone depuis GitHub.
+    """
+    repo_path = _repo_path(owner, repo)
+    repo_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not repo_path.exists():
+        if remote_url is None:
+            remote_url = f"https://github.com/{owner}/{repo}.git"
+        Repo.clone_from(remote_url, repo_path)
+
+    return Repo(repo_path)
+
+
+def _fetch(repo: Repo) -> None:
+    """Met à jour le dépôt local depuis le remote origin."""
     try:
-        r = requests.get(
-            url, headers=HEADERS, params=params or {}, timeout=HTTP_TIMEOUT
-        )
-        r.raise_for_status()  # raise for non-2xx status codes so caller can catch
-        return r
-    except requests.HTTPError as http_err:
-        # optionally log more info
-        print(f"❌ GitHub API HTTP error: {http_err} (url={url})")
-        raise
-    except Exception as e:
-        print(f"❌ GitHub API request error: {e} (url={url})")
-        raise
+        repo.remotes.origin.fetch(prune=True)
+    except GitCommandError:
+        repo.remotes.origin.fetch()
 
 
-def get_latest_commit(owner: str, repo: str, branch: str) -> str:
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits/{branch}"
-    repo_json = github_get(url).json()
-    sha = repo_json.get("sha")
-    date = repo_json.get("commit", {}).get("committer", {}).get(
-        "date"
-    ) or repo_json.get("commit", {}).get("author", {}).get("date")
-    return {"sha": sha, "date": date, "raw": repo_json}
+# --------------------------------------------------------------------
+# Fonctions principales
+# --------------------------------------------------------------------
+
+def get_latest_commit(owner: str, repo: str, branch: str) -> dict[str, Any]:
+    """Retourne le SHA et la date du dernier commit d'une branche donnée."""
+    r = get_or_clone_repo(owner, repo)
+    _fetch(r)
+    try:
+        commit = r.commit(f"origin/{branch}")
+    except Exception:
+        commit = r.commit(branch)
+
+    sha = commit.hexsha
+    dt = commit.committed_datetime
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    return {"sha": sha, "date": dt.isoformat(), "raw": commit}
 
 
 def get_tree_index(owner: str, repo: str, sha: str) -> dict[str, list[str]]:
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{sha}"
-    tree_json = github_get(url, params={"recursive": "1"}).json()
+    """Retourne un index des fichiers présents dans un commit donné."""
+    r = get_or_clone_repo(owner, repo)
+    try:
+        r.commit(sha)
+    except Exception:
+        _fetch(r)
+
+    out = r.git.ls_tree("-r", "--name-only", sha)
     files_index = {}
-    for entry in tree_json.get("tree", []):
-        if entry.get("type") == "blob":
-            path = entry.get("path", "")
-            dirname = os.path.dirname(path)
-            if dirname == "":
-                dirname = "."
-            filename = os.path.basename(path)
-            files_index.setdefault(dirname, []).append(filename)
+
+    for line in out.splitlines():
+        if not line:
+            continue
+        path = Path(line)
+        dirname = path.parent.as_posix() or "."
+        filename = path.name
+        files_index.setdefault(dirname, []).append(filename)
 
     return files_index
 
 
-def get_compare(owner: str, repo: str, base: str, head: str) -> dict:
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/compare/{base}...{head}"
-    return github_get(url).json()
+def get_compare(owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
+    """Retourne la liste des fichiers modifiés, ajoutés, supprimés ou renommés entre deux commits."""
+    r = get_or_clone_repo(owner, repo)
+    _fetch(r)
+
+    out = r.git.diff("--name-status", "-M", base, head)
+    files = []
+
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if not parts:
+            continue
+        status = parts[0]
+        if status.startswith("R"):
+            files.append({
+                "status": "renamed",
+                "filename": parts[2],
+                "previous_filename": parts[1],
+            })
+        else:
+            mapping = {"A": "added", "M": "modified", "D": "removed", "T": "modified"}
+            files.append({
+                "status": mapping.get(status, status.lower()),
+                "filename": parts[1],
+            })
+
+    return {"files": files}
 
 
-def get_contents(owner:str, repo:str, file: str, ref: str):
-    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{file}"
-    j = github_get(url, params={"ref": ref}).json()
-    content = j.get("content")
-    if content and j.get("encoding") == "base64":
-        return base64.b64decode(content).decode("utf-8")
-    return content
+def get_contents(owner: str, repo: str, file: str, ref: str) -> str | None:
+    """Retourne le contenu d’un fichier à une révision donnée (commit, tag ou branche)."""
+    r = get_or_clone_repo(owner, repo)
+    _fetch(r)
+    try:
+        return r.git.show(f"{ref}:{file}")
+    except GitCommandError:
+        return None
 
 
 def classify_files_events(
@@ -760,7 +816,7 @@ def build_final_report(check_results, concistency_results):
 
 @flow(log_prints=True)
 def repos_check_flow(
-    repo_config_list: list[dict[str, Any]] = None,
+    repo_config_list: list[dict[str, Any]] | None = None,
     state_file: str = "repo_watcher_state.yml",
     reco_file: str = "repo_recommendations.yml",
 ):
