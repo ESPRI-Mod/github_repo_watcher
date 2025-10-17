@@ -496,20 +496,27 @@ def compare_reference(
     ref_root_files = ref_tree.get(".", []) or []
 
     dir_mapping = {}
-    for dir, files in files_index.items():
-        dir_mapping[dir] = set(files or [])
+    dir_mapping_lower = {}
+    for dir_name, files in (files_index or {}).items():
+        dir_mapping[dir_name] = set(files or [])
+        dir_name_lower = dir_name.lower()
+        dir_mapping_lower[dir_name_lower] = set()
+        for f in (files or []):
+            dir_mapping_lower[dir_name_lower].add(f.lower())
 
-    # Pattern : PROJECT_collection.json
-    pattern = re.compile(r"^(.+?)_([A-Za-z0-9_]+)\.json$", flags=re.IGNORECASE)
     skipped_collections = {"drs", "license", "fixed", "required_global_attributes", "table_id"}
 
     for file in ref_root_files:
-        match = pattern.match(file)
-        if not match:
+        if "_" not in file:
             continue
-        project_prefix, collection = match.group(1), match.group(2)
+        project_prefix, _, remainder = file.partition("_")
+        if not remainder.lower().endswith(".json"):
+            continue
+        collection = remainder[:-5]
+
         if collection.lower() in skipped_collections:
             continue
+
         if project and project_prefix.lower() != project.lower():
             continue
 
@@ -548,32 +555,43 @@ def compare_reference(
             continue
 
         matched_dir = None
+        collection_lower = collection.lower()
         for d in dir_mapping.keys():
-            if d.lower() == collection.lower():
+            if d.lower() == collection_lower:
                 matched_dir = d
                 break
 
         for term_key in collection_root.keys():
             expected_lower = f"{term_key}.json".lower()
             found_path = None
+            found_fname = None
+
             if matched_dir:
-                for fname in dir_mapping.get(matched_dir, set()):
-                    if fname.lower() == expected_lower:
-                        found_path = f"{matched_dir}/{fname}"
-                        break
+                matched_dir_lower = matched_dir.lower()
+                filenames_lower = dir_mapping_lower.get(matched_dir_lower, set())
+                if expected_lower in filenames_lower:
+                    for fname in dir_mapping.get(matched_dir, set()):
+                        if fname.lower() == expected_lower:
+                            found_fname = fname
+                            found_path = f"{matched_dir}/{fname}"
+                            break
 
             if not found_path:
                 events["reference_term_missing"].append({
-                    "file": file, "expected": f"{collection}/{term_key.lower()}.json",
-                    "key": term_key, "collection": collection
+                    "file": file,
+                    "expected": f"{collection}/{term_key.lower()}.json",
+                    "key": term_key,
+                    "collection": collection
                 })
                 continue
 
             working_content = get_contents(owner, repo_name, found_path, working_branch)
             if not working_content:
                 events["reference_term_mismatch"].append({
-                    "file": found_path, "reason": "could not fetch working file",
-                    "key": term_key, "collection": collection
+                    "file": found_path,
+                    "reason": "could not fetch working file",
+                    "key": term_key,
+                    "collection": collection
                 })
                 continue
 
@@ -581,8 +599,10 @@ def compare_reference(
                 wj = json.loads(working_content)
             except Exception as exc:
                 events["reference_term_mismatch"].append({
-                    "file": found_path, "reason": f"json parse error: {exc}",
-                    "key": term_key, "collection": collection
+                    "file": found_path,
+                    "reason": f"json parse error: {exc}",
+                    "key": term_key,
+                    "collection": collection
                 })
                 continue
 
@@ -590,8 +610,10 @@ def compare_reference(
             actual_id = wj.get("id") if isinstance(wj, dict) else None
             if not isinstance(actual_id, str) or actual_id.lower() != expected_id:
                 events["reference_term_mismatch"].append({
-                    "file": found_path, "key": term_key,
-                    "expected_id": expected_id, "actual_id": actual_id,
+                    "file": found_path,
+                    "key": term_key,
+                    "expected_id": expected_id,
+                    "actual_id": actual_id,
                     "collection": collection
                 })
                 continue
@@ -599,12 +621,14 @@ def compare_reference(
             actual_type = wj.get("type")
             if not isinstance(actual_type, str) or not actual_type:
                 events["reference_term_mismatch"].append({
-                    "file": found_path, "key": term_key,
+                    "file": found_path,
+                    "key": term_key,
                     "reason": "missing or invalid 'type' field",
                     "collection": collection
                 })
 
     return events
+
 
 @task(log_prints=True)
 def check_reference_consistency(
