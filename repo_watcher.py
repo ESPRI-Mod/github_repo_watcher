@@ -794,13 +794,15 @@ def build_final_report(check_results, concistency_results):
         )
         if key in concistency_results:
             concistency_result = concistency_results[key]
-            artifact_content = artifact_content + [
-                "## Reference consistency check",
-                f"{concistency_result['artifact_message']}",
-                "",
-            ]
-        artifact_content = "\n".join(artifact_content)
-        parts.append(artifact_content)
+            artifact_content += "\n".join(
+                [
+                    "## Reference consistency check",
+                    f"{concistency_result['artifact_message']}",
+                    "",
+                ]
+            )
+
+        parts.append(artifact_content.strip() + "\n")
 
     md_content = "\n\n---\n\n".join(parts).strip() + "\n"
 
