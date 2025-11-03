@@ -720,11 +720,10 @@ def check_reference_consistency(
 
     if artifact_message:
         artifact_message = "\n".join(artifact_message)
+        cancelled = False
     else:
         artifact_message = "✅ No issues detected."
-
-        with get_client(sync_client=True) as client:
-            client.set_task_run_state(task_run_id=runtime.task_run.id, state=Cancelled(), force=True)
+        cancelled = True
 
     artifact_content = "\n".join(
     [
@@ -754,6 +753,8 @@ def check_reference_consistency(
         "artifact_name": artifact_name_safe,
         "artifact_content": artifact_content,
         "artifact_message": artifact_message,
+        "cancelled": cancelled,
+        "task_run_id": runtime.task_run.id,
     }
 
 
@@ -897,6 +898,15 @@ def repos_check_flow(
                 reco_path,
                 check_result["files_index"],
             )
+
+            if consistency_result and consistency_result.get("cancelled"):
+                with get_client(sync_client=True) as client:
+                    client.set_task_run_state(
+                        task_run_id=consistency_result.get("task_run_id"),
+                        state=Cancelled(),
+                        force=True,
+                    )
+
             consistency_results.append(consistency_result)
     
     build_consistency_report(consistency_results)
