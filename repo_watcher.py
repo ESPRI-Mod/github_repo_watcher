@@ -340,6 +340,7 @@ def repo_check_single(
         )
 
         with get_client(sync_client=True) as client:
+            print(f"Setting task run state to Cancelled for task_run_id={runtime.task_run.id}")
             client.set_task_run_state(task_run_id=runtime.task_run.id, state=Cancelled(), force=True)
     # => No information stored about this repo/branch yet
     elif repo_state is None:
