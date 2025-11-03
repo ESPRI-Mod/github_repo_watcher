@@ -327,7 +327,7 @@ def repo_check_single(
     date = latest.get("date")
     date_now = datetime.now(timezone.utc)
 
-    changed = False
+    cancelled = False
     events = {}
     # => No new commit detected
     if sha == prev_sha:
@@ -339,9 +339,7 @@ def repo_check_single(
             f"✅ No new commits since last check. Latest commit: {sha} at {date}."
         )
 
-        with get_client(sync_client=True) as client:
-            print(f"Setting task run state to Cancelled for task_run_id={runtime.task_run.id}")
-            client.set_task_run_state(task_run_id=runtime.task_run.id, state=Cancelled(), force=True)
+        cancelled = True
     # => No information stored about this repo/branch yet
     elif repo_state is None:
         print(f"🟣 Initial check for {owner}/{repo_name} on branch {working_branch}.")
@@ -363,8 +361,7 @@ def repo_check_single(
 
         artifact_message = f"🟣 Initial check completed. Latest commit: {sha} at {date}."
 
-        with get_client(sync_client=True) as client:
-            client.set_task_run_state(task_run_id=runtime.task_run.id, state=Cancelled(), force=True)
+        cancelled = True
     # => A new commit has been detected
     else:
         comparison: dict[str, Any] = get_compare(owner, repo_name, prev_sha, sha)
@@ -466,7 +463,8 @@ def repo_check_single(
         "project": project,
         "sha": sha,
         "date": date,
-        "changed": changed,
+        "cancelled": cancelled,
+        "task_run_id": runtime.task_run.id,
         "state": repo_state,
         "events": events,
         "artifact_name": artifact_name_safe,
@@ -874,6 +872,14 @@ def repos_check_flow(
             state_path,
             reco_path,
         )
+
+        if check_result and check_result.get("cancelled"):
+            with get_client(sync_client=True) as client:
+                client.set_task_run_state(
+                    task_run_id=check_result.get("task_run_id"),
+                    state=Cancelled(),
+                    force=True,
+                )
 
         check_results[f"{owner}-{repo_name}-{working_branch}"] = check_result
     
