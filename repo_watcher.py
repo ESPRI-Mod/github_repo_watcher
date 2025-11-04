@@ -497,6 +497,7 @@ def compare_reference(
 
     dir_mapping = {}
     dir_mapping_lower = {}
+    print(working_root_files)
     for dir_name, files in (working_root_files or {}).items():
         dir_mapping[dir_name] = set(files or [])
         dir_name_lower = dir_name.lower()
@@ -504,7 +505,7 @@ def compare_reference(
         for f in (files or []):
             dir_mapping_lower[dir_name_lower].add(f.lower())
 
-    skipped_collections = {"drs", "license", "fixed", "required_global_attributes", "table_id"}
+    SKIPPED_COLLECTIONS = {"drs", "license", "fixed", "required_global_attributes", "table_id"}
 
     for file in ref_root_files:
         if "_" not in file:
@@ -514,7 +515,7 @@ def compare_reference(
             continue
         collection = remainder[:-5]
 
-        if collection.lower() in skipped_collections:
+        if collection.lower() in SKIPPED_COLLECTIONS:
             continue
 
         if project and project_prefix.lower() != project.lower():
