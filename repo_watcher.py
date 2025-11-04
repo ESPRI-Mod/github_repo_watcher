@@ -14,6 +14,7 @@ from prefect.artifacts import create_markdown_artifact
 from prefect import flow, task, runtime
 from prefect.client import get_client
 from prefect.states import Cancelled
+from prefect.client.schemas.objects import Variable
 
 
 GITHUB_API_BASE = "https://api.github.com"
@@ -23,6 +24,33 @@ GITHUB_API_BASE = "https://api.github.com"
 #     HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
 # HTTP_TIMEOUT = 30
 REPOS_BASE = Path("repos_cache")
+STATE_VARIABLE_NAME = "repo_watcher_state"
+
+
+def load_state_variable() -> dict[str, Any]:
+    """
+    """
+    try:
+        var = Variable.get(STATE_VARIABLE_NAME, default=None)
+        if isinstance(var, str):
+            return yaml.safe_load(var)
+        elif isinstance(var, dict):
+            return var
+        else:
+            return {}
+    except Exception:
+        return {}
+
+def save_state_variable(state: dict[str, Any]):
+    """
+    """
+    try:
+        Variable.set(
+            STATE_VARIABLE_NAME,
+            yaml.safe_dump(state, sort_keys=True, allow_unicode=True),
+        )
+    except Exception as exc:
+        print(f"⚠️ Failed to save state variable: {exc}")
 
 
 def read_yaml(path: Path) -> dict | None:
@@ -44,6 +72,14 @@ def _repo_path(owner: str, repo: str) -> Path:
     return REPOS_BASE / f"{owner}__{repo}"
 
 
+def _fetch(repo: Repo) -> None:
+    """Met à jour le dépôt local depuis le remote origin."""
+    try:
+        repo.remotes.origin.fetch(prune=True)
+    except GitCommandError:
+        repo.remotes.origin.fetch()
+
+
 def get_or_clone_repo(owner: str, repo: str, remote_url: str | None = None) -> Repo:
     """
     Ouvre un dépôt local s'il existe, sinon le clone depuis GitHub.
@@ -56,15 +92,12 @@ def get_or_clone_repo(owner: str, repo: str, remote_url: str | None = None) -> R
             remote_url = f"https://github.com/{owner}/{repo}.git"
         Repo.clone_from(remote_url, repo_path)
 
+    _fetch(repo_path)
+
     return Repo(repo_path)
 
 
-def _fetch(repo: Repo) -> None:
-    """Met à jour le dépôt local depuis le remote origin."""
-    try:
-        repo.remotes.origin.fetch(prune=True)
-    except GitCommandError:
-        repo.remotes.origin.fetch()
+
 
 
 # --------------------------------------------------------------------
@@ -74,7 +107,6 @@ def _fetch(repo: Repo) -> None:
 def get_latest_commit(owner: str, repo: str, branch: str) -> dict[str, Any]:
     """Retourne le SHA et la date du dernier commit d'une branche donnée."""
     r = get_or_clone_repo(owner, repo)
-    _fetch(r)
     try:
         commit = r.commit(f"origin/{branch}")
     except Exception:
@@ -91,10 +123,7 @@ def get_latest_commit(owner: str, repo: str, branch: str) -> dict[str, Any]:
 def get_tree_index(owner: str, repo: str, sha: str) -> dict[str, list[str]]:
     """Retourne un index des fichiers présents dans un commit donné."""
     r = get_or_clone_repo(owner, repo)
-    try:
-        r.commit(sha)
-    except Exception:
-        _fetch(r)
+    r.commit(sha)
 
     out = r.git.ls_tree("-r", "--name-only", sha)
     files_index = {}
@@ -113,8 +142,6 @@ def get_tree_index(owner: str, repo: str, sha: str) -> dict[str, list[str]]:
 def get_compare(owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
     """Retourne la liste des fichiers modifiés, ajoutés, supprimés ou renommés entre deux commits."""
     r = get_or_clone_repo(owner, repo)
-    _fetch(r)
-
     out = r.git.diff("--name-status", "-M", base, head)
     files = []
 
@@ -142,7 +169,6 @@ def get_compare(owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
 def get_contents(owner: str, repo: str, file: str, ref: str) -> str | None:
     """Retourne le contenu d’un fichier à une révision donnée (commit, tag ou branche)."""
     r = get_or_clone_repo(owner, repo)
-    _fetch(r)
     try:
         return r.git.show(f"{ref}:{file}")
     except GitCommandError:
@@ -310,8 +336,10 @@ def repo_check_single(
         dict: A dictionary containing the results of the check.
     """
 
-    state = read_yaml(state_path) or {}
-    repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch) or None
+    state = load_state_variable()
+    repo_key = f"{owner}/{repo_name}@{working_branch}"
+    repo_state = state.get(repo_key, None)
+
     reco = (read_yaml(reco_path) or {}).get("globals", {}) or {}
 
     try:
@@ -327,9 +355,10 @@ def repo_check_single(
     date = latest.get("date")
     date_now = datetime.now(timezone.utc)
 
-    cancelled = False
+    changed = False
     events = {}
-    # => No new commit detected
+
+    # No new commit detected
     if sha == prev_sha:
         print(
             f"✅ No updates for {owner}/{repo_name} on branch {working_branch}. Latest commit: {sha} at {date}."
@@ -338,36 +367,18 @@ def repo_check_single(
         artifact_message = (
             f"✅ No new commits since last check. Latest commit: {sha} at {date}."
         )
-
-        cancelled = True
-    # => No information stored about this repo/branch yet
+    
+    # No information stored about this repo/branch yet
     elif repo_state is None:
         print(f"🟣 Initial check for {owner}/{repo_name} on branch {working_branch}.")
-
-        new_index = get_tree_index(owner, repo_name, sha)
-        state.setdefault(owner, {}).setdefault(repo_name, {})[working_branch] = {
-            "sha": sha,
-            "date": date,
-            "checked_at": date_now.isoformat(),
-            "files_index": new_index,
-        }
-
-        write_yaml(state_path, state)
-        repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch)
-
-        print(
-            f"Initial state recorded for {owner}/{repo_name} on branch {working_branch} at {date_now}. Commit SHA: {sha} published at {date_now.strftime('%Y-%m-%d %H:%m:%s')}."
-        )
-
         artifact_message = f"🟣 Initial check completed. Latest commit: {sha} at {date}."
 
-        cancelled = True
-    # => A new commit has been detected
+    # A new commit has been detected
     else:
-        comparison: dict[str, Any] = get_compare(owner, repo_name, prev_sha, sha)
-        files_changed: dict[str, Any] = comparison.get("files", [])
-        prev_index: dict[str, list[str]] = repo_state.get("files_index", {})
-        new_index: dict[str, list[str]] = get_tree_index(owner, repo_name, sha)
+        comparison = get_compare(owner, repo_name, prev_sha, sha)
+        files_changed = comparison.get("files", [])
+        prev_index = get_tree_index(owner, repo_name, prev_sha)
+        new_index= get_tree_index(owner, repo_name, sha)
 
         events = classify_files_events(files_changed, prev_index, new_index)
 
@@ -375,6 +386,7 @@ def repo_check_single(
             recommendation_type = "universe"
         else:
             recommendation_type = "vocab"
+        
         rec_lines = []
         for event_type, event_list in events.items():
             if not event_list:
@@ -426,15 +438,7 @@ def repo_check_single(
 
         artifact_message = "\n".join(artifact_message)
 
-        state.setdefault(owner, {}).setdefault(repo_name, {})[working_branch] = {
-            "sha": sha,
-            "date": date,
-            "checked_at": date_now.isoformat(),
-            "files_index": new_index,
-        }
-
-        write_yaml(state_path, state)
-        repo_state = state.get(owner, {}).get(repo_name, {}).get(working_branch)
+        changed = True
 
     artifact_name = f"repo-{owner}-{repo_name}-{working_branch}"
     artifact_name_safe = re.sub(r"[^a-z0-9-]", "-", artifact_name.lower())
@@ -463,14 +467,12 @@ def repo_check_single(
         "project": project,
         "sha": sha,
         "date": date,
-        "cancelled": cancelled,
+        "changed": changed,
         "task_run_id": runtime.task_run.id,
-        "state": repo_state,
         "events": events,
         "artifact_name": artifact_name_safe,
         "artifact_content": artifact_content,
         "artifact_message": artifact_message,
-        "files_index": repo_state.get("files_index", {}),
     }
 
 
@@ -480,7 +482,6 @@ def compare_reference(
     working_branch: str,
     reference_branch: str,
     project: str,
-    files_index,
 ):
     """
     """
@@ -490,13 +491,17 @@ def compare_reference(
         "reference_file_parse_error": [],
     }
 
-    reference_sha = get_latest_commit(owner, repo_name, reference_branch).get("sha")
-    ref_tree = get_tree_index(owner, repo_name, reference_sha)
+    working_sha = get_latest_commit(owner, repo_name, working_branch).get("sha")
+    working_tree = get_tree_index(owner, repo_name, working_sha)
+    working_root_files = working_tree.get(".", []) or []
+
+    ref_sha = get_latest_commit(owner, repo_name, reference_branch).get("sha")
+    ref_tree = get_tree_index(owner, repo_name, ref_sha)
     ref_root_files = ref_tree.get(".", []) or []
 
     dir_mapping = {}
     dir_mapping_lower = {}
-    for dir_name, files in (files_index or {}).items():
+    for dir_name, files in (working_root_files or {}).items():
         dir_mapping[dir_name] = set(files or [])
         dir_name_lower = dir_name.lower()
         dir_mapping_lower[dir_name_lower] = set()
@@ -637,7 +642,6 @@ def check_reference_consistency(
     reference_branch: str | None,
     project: str,
     reco_path: Path,
-    files_index,
 ):
     reco = (read_yaml(reco_path) or {}).get("globals", {}) or {}
 
@@ -647,7 +651,6 @@ def check_reference_consistency(
         working_branch,
         reference_branch,
         project,
-        files_index,
     )
 
     if project == "universe":
@@ -896,7 +899,6 @@ def repos_check_flow(
                 check_result["reference_branch"],
                 check_result["project"],
                 reco_path,
-                check_result["files_index"],
             )
 
             if consistency_result and consistency_result.get("cancelled"):
