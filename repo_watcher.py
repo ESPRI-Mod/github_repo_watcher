@@ -24,15 +24,12 @@ REPO_WATCHER_TAG = "repo_watcher"
 
 def save_variable(variable: str, value: dict[str, Any]):
     """ """
-    try:
-        Variable.set(
-            variable,
-            value,
-            tags=[REPO_WATCHER_TAG],
-            overwrite=True,
-        )
-    except Exception as exc:
-        print(f"⚠️ Failed to save state variable: {exc}")
+    Variable.set(
+        variable,
+        value,
+        tags=[REPO_WATCHER_TAG],
+        overwrite=True,
+    )
 
 
 def read_yaml(path: Path) -> dict | None:
