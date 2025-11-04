@@ -337,7 +337,10 @@ def repo_check_single(
 
     state = load_state_variable()
     repo_key = f"{owner}/{repo_name}@{working_branch}"
+    print(state)
+    print(repo_key)
     repo_state = state.get(repo_key, None)
+    print(repo_state)
 
     reco = (read_yaml(reco_path) or {}).get("globals", {}) or {}
 
