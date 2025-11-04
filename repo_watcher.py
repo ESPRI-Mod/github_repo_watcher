@@ -345,7 +345,7 @@ def repo_check_single(
     try:
         latest = get_latest_commit(owner, repo_name, working_branch)
     except Exception as exc:
-        print("⚠️ Failed to fetch latest commit for {owner}/{repo_name}@{working_branch}: {exc}")
+        print(f"⚠️ Failed to fetch latest commit for {owner}/{repo_name}@{working_branch}: {exc}")
         return {
             "repo": f"{owner}/{repo_name}@{working_branch}",
             "error": f"Failed to fetch commits: {exc}",
