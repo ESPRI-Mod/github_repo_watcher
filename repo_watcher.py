@@ -233,16 +233,22 @@ def classify_files_events(
         "term_removed": [],
     }
 
+    IGNORED_PREFIXES = ("_", ".", "script")
+
     prev_dirs = {d for d in (prev_index or {}) if d != "."}
     new_dirs = {d for d in (new_index or {}) if d != "."}
     seen_collections = set()
 
-    for f in files_changed or []:
-        path = f.get("filename")
+    for file_changed in files_changed or []:
+        path = file_changed.get("filename")
         if not path or "/" not in path:
             continue
         collection, term = path.split("/", 1)
-        status = f.get("status")
+
+        if collection.startswith(IGNORED_PREFIXES):
+            continue
+
+        status = file_changed.get("status")
 
         if status == "added":
             if collection not in prev_dirs and collection not in seen_collections:
@@ -263,7 +269,7 @@ def classify_files_events(
             )
 
         elif status == "renamed":
-            prev = f.get("previous_filename")
+            prev = file_changed.get("previous_filename")
             if prev and "/" in prev:
                 pc, pt = prev.split("/", 1)
                 events["term_removed"].append(
