@@ -22,19 +22,6 @@ RECOMMENDATIONS_VARIABLE_NAME = "repo_watcher_recommendations"
 REPO_WATCHER_TAG = "repo_watcher"
 
 
-def load_variable(variable: str) -> dict[str, Any]:
-    """ """
-    try:
-        var = Variable.get(variable, default=None)
-        if isinstance(var, str):
-            return yaml.safe_load(var)
-        if isinstance(var, dict):
-            return var
-        return {}
-    except Exception:
-        return {}
-
-
 def save_variable(variable: str, value: dict[str, Any]):
     """ """
     try:
@@ -331,11 +318,11 @@ def repo_check_single(
         dict: A dictionary containing the results of the check.
 
     """
-    state = load_variable(STATE_VARIABLE_NAME)
+    state = Variable.get(STATE_VARIABLE_NAME, _sync=True)
     repo_key = f"{owner}/{repo_name}@{working_branch}"
     repo_state = state.get(repo_key, None)
 
-    recommendations = load_variable(RECOMMENDATIONS_VARIABLE_NAME)
+    recommendations = Variable.get(RECOMMENDATIONS_VARIABLE_NAME, _sync=True)
 
     try:
         latest = get_latest_commit(owner, repo_name, working_branch)
