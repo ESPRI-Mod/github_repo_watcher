@@ -5,7 +5,7 @@ import re
 from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import yaml
 from git import GitCommandError, Repo
@@ -14,12 +14,44 @@ from prefect.artifacts import create_markdown_artifact
 from prefect.client import get_client
 from prefect.states import Cancelled
 from prefect.variables import Variable
+from pydantic import BaseModel
 
 GITHUB_API_BASE = "https://api.github.com"
 REPOS_BASE = Path("repos_cache")
 STATE_VARIABLE_NAME = "repo_watcher_state"
 RECOMMENDATIONS_VARIABLE_NAME = "repo_watcher_recommendations"
 REPO_WATCHER_TAG = "repo_watcher"
+
+
+class RepoConfig(BaseModel):
+    """- owner: WCRP-CORDEX
+    repo: cordex-cmip6-cv
+    working_branch: esgvoc
+    reference_branch: main
+    project: CORDEX-CMIP6
+    """
+
+    owner: str
+    repo: str
+    working_branch: str
+    reference_branch: str | None
+    project: str
+
+
+class CheckResult(TypedDict):
+    sha: str
+    date: str
+    changed: str
+    task_run_id: str
+    events: str
+    artifact_name: str
+    artifact_content: str
+    artifact_message: str
+
+
+class FileCompare(TypedDict):
+    status: str
+    filename: str
 
 
 def save_variable(variable: str, value: dict[str, Any]):
@@ -116,7 +148,7 @@ def get_tree_index(owner: str, repo: str, sha: str) -> dict[str, list[str]]:
     return files_index
 
 
-def get_compare(owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
+def get_compare(owner: str, repo: str, base: str, head: str) -> list[FileCompare]:
     """Retourne la liste des fichiers modifiés, ajoutés, supprimés ou renommés entre deux commits."""
     r = get_or_clone_repo(owner, repo)
     out = r.git.diff("--name-status", "-M", base, head)
@@ -144,7 +176,7 @@ def get_compare(owner: str, repo: str, base: str, head: str) -> dict[str, Any]:
                 },
             )
 
-    return {"files": files}
+    return files
 
 
 def get_contents(owner: str, repo: str, file: str, ref: str) -> str | None:
@@ -296,17 +328,15 @@ def collect_templates_for_event(
 def repo_check_single(
     owner: str,
     repo_name: str,
-    working_branch: str,
-    reference_branch: str | None,
+    branch: str,
     project: str,
-) -> dict:
+) -> CheckResult:
     """Check a single repository for updates based on the provided configuration.
 
     Args:
         owner (str): The owner of the repository.
         repo_name (str): The name of the repository.
-        working_branch (str): The branch to check for updates.
-        reference_branch (str | None): The branch to compare against, if any.
+        branch (str): The branch to check for updates.
         project (str): The project name associated with the repository.
         state_path (Path): Path to the state file.
         reco_path (Path): Path to the recommendations file.
@@ -316,13 +346,13 @@ def repo_check_single(
 
     """
     state = Variable.get(STATE_VARIABLE_NAME, _sync=True)
-    repo_key = f"{owner}/{repo_name}@{working_branch}"
+    repo_key = f"{owner}/{repo_name}@{branch}"
     repo_state = state.get(repo_key, None)
 
     recommendations = Variable.get(RECOMMENDATIONS_VARIABLE_NAME, _sync=True)
 
     try:
-        latest = get_latest_commit(owner, repo_name, working_branch)
+        latest = get_latest_commit(owner, repo_name, branch)
     except Exception as exc:
         print(f"⚠️ Failed to fetch latest commit for {owner}/{repo_name}@{working_branch}: {exc}")
         return {
@@ -344,16 +374,16 @@ def repo_check_single(
         )
 
         artifact_message = f"✅ No new commits since last check. Latest commit: {sha} at {date}."
+        return Cancelled()
 
     # No information stored about this repo/branch yet
-    elif repo_state is None:
+    if repo_state is None:
         print(f"🟣 Initial check for {owner}/{repo_name} on branch {working_branch}.")
         artifact_message = f"🟣 Initial check completed. Latest commit: {sha} at {date}."
 
     # A new commit has been detected
     else:
-        comparison = get_compare(owner, repo_name, prev_sha, sha)
-        files_changed = comparison.get("files", [])
+        files_changed = get_compare(owner, repo_name, prev_sha, sha)
         prev_index = get_tree_index(owner, repo_name, prev_sha)
         new_index = get_tree_index(owner, repo_name, sha)
         print("prev", prev_index)
@@ -444,11 +474,6 @@ def repo_check_single(
     save_variable(STATE_VARIABLE_NAME, state)
 
     return {
-        "owner": owner,
-        "repo": repo_name,
-        "working_branch": working_branch,
-        "reference_branch": reference_branch,
-        "project": project,
         "sha": sha,
         "date": date,
         "changed": changed,
@@ -859,71 +884,42 @@ def build_final_report(check_results, concistency_results):
         pass
 
 
-@flow(log_prints=True)
-def repos_check_flow(
-    repo_config_list: list[dict[str, Any]] | None = None,
-    state_file: str = "repo_watcher_state.yml",
-    reco_file: str = "repo_recommendations.yml",
-):
-    state_path = Path(state_file)
-    if not state_path.exists():
-        print("❌ Recommendations file '{state_file}' not found at path {state_path}.")
-        raise SystemExit(0)
+@flow
+def check_repo(config: RepoConfig):
+    check_result_working = repo_check_single(
+        config.owner,
+        config.repo,
+        config.working_branch,
+        config.project,
+    )
+    # check_result_reference = repo_check_single(
+    #     config.owner,
+    #     config.repo,
+    #     config.reference_branch,
+    #     config.project,
+    # )
 
-    reco_path = Path(reco_file)
-    if not reco_path.exists():
-        print("❌ Recommendations file '{reco_file}' not found at path {reco_path}.")
-        raise SystemExit(0)
-
-    check_results = {}
-    for repo_config in repo_config_list:
-        owner: str = repo_config.get("owner")
-        repo_name: str = repo_config.get("repo")
-        working_branch: str = repo_config.get("working_branch")
-        reference_branch: str | None = repo_config.get("reference_branch")
-        project: str = repo_config.get("project")
-
-        check_result = repo_check_single(
-            owner,
-            repo_name,
-            working_branch,
-            reference_branch,
-            project,
+    if config.reference_branch is not None:
+        consistency_result = check_reference_consistency(
+            config.owner,
+            config.repo,
+            config.working_branch,
+            config.reference_branch,
+            config.project,
+            reco_path,
         )
 
-        if check_result and check_result.get("changed") is False:
+        if consistency_result and consistency_result.get("cancelled"):
             with get_client(sync_client=True) as client:
                 client.set_task_run_state(
-                    task_run_id=check_result.get("task_run_id"),
+                    task_run_id=consistency_result.get("task_run_id"),
                     state=Cancelled(),
                     force=True,
                 )
 
-        check_results[f"{owner}-{repo_name}-{working_branch}"] = check_result
+        consistency_results.append(consistency_result)
 
-    build_check_report(check_results)
-
-    consistency_results = []
-    for key, check_result in check_results.items():
-        if check_result["reference_branch"]:
-            consistency_result = check_reference_consistency(
-                check_result["owner"],
-                check_result["repo"],
-                check_result["working_branch"],
-                check_result["reference_branch"],
-                check_result["project"],
-                reco_path,
-            )
-
-            if consistency_result and consistency_result.get("cancelled"):
-                with get_client(sync_client=True) as client:
-                    client.set_task_run_state(
-                        task_run_id=consistency_result.get("task_run_id"),
-                        state=Cancelled(),
-                        force=True,
-                    )
-
-            consistency_results.append(consistency_result)
+    #######
 
     build_consistency_report(consistency_results)
 
@@ -940,3 +936,34 @@ if __name__ == "__main__":
     repo_config_list = read_yaml(repo_config_path).get("repos")
 
     out = repos_check_flow(repo_config_list)
+
+
+"""
+
+repo A
+- a0:
+    - b0 [c0, c1]
+
+    |
+    v
+
+a0/b0/c0
+a0/b0/c1
+
+
+----
+
+repo B
+- a0 {b0: [c0]}
+- a1 {}
+- a2 {}
+
+    |
+    v
+
+a0/b0/c0
+a1
+a2
+
+
+"""
