@@ -269,37 +269,29 @@ def classify_files_events(
             )
 
         elif status == "renamed":
-            prev = file_changed.get("previous_filename")
-            if prev and "/" in prev:
-                pc, pt = prev.split("/", 1)
+            previous = file_changed.get("previous_filename")
+            if previous and "/" in previous:
+                previous_collection, previous_term = previous.split("/", 1)
                 events["term_removed"].append(
-                    {"collection": pc, "term": pt, "path": prev}
+                    {"collection": previous_collection, "term": previous_term, "path": previous}
                 )
             events["term_created"].append(
                 {"collection": collection, "term": term, "path": path}
             )
 
     # collections removed (present before, absent now)
-    for col in sorted(prev_dirs - new_dirs):
-        if col not in seen_collections:
-            events["collection_removed"].append({"collection": col})
+    for collection in sorted(prev_dirs - new_dirs):
+        if collection not in seen_collections:
+            if collection.startswith(IGNORED_PREFIXES):
+                continue
+            events["collection_removed"].append({"collection": collection})
 
     # deduplicate preserving order
-    def _dedup(lst, key):
-        seen = set()
-        out = []
-        for item in lst:
-            k = item.get(key)
-            if k not in seen:
-                out.append(item)
-                seen.add(k)
-        return out
-
-    events["collection_created"] = _dedup(events["collection_created"], "collection")
-    events["collection_removed"] = _dedup(events["collection_removed"], "collection")
-    events["term_created"] = _dedup(events["term_created"], "path")
-    events["term_modified"] = _dedup(events["term_modified"], "path")
-    events["term_removed"] = _dedup(events["term_removed"], "path")
+    events["collection_created"] = list({d["collection"]: d for d in events["collection_created"]}.values())
+    events["collection_removed"] = list({d["collection"]: d for d in events["collection_removed"]}.values())
+    events["term_created"] = list({d["path"]: d for d in events["term_created"]}.values())
+    events["term_modified"] = list({d["path"]: d for d in events["term_modified"]}.values())
+    events["term_removed"] = list({d["path"]: d for d in events["term_removed"]}.values())
 
     return events
 
