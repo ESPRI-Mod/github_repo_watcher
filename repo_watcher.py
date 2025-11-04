@@ -508,7 +508,7 @@ def compare_reference(
 
     dir_mapping = {}
     dir_mapping_lower = {}
-    for dir_name, files in (working_root_files or {}).items():
+    for dir_name, files in (working_tree or {}).items():
         dir_mapping[dir_name] = set(files or [])
         dir_name_lower = dir_name.lower()
         dir_mapping_lower[dir_name_lower] = set()
