@@ -14,7 +14,7 @@ from prefect.artifacts import create_markdown_artifact
 from prefect import flow, task, runtime
 from prefect.client import get_client
 from prefect.states import Cancelled
-from prefect.client.schemas.objects import Variable
+from prefect.variables import Variable
 
 
 GITHUB_API_BASE = "https://api.github.com"
