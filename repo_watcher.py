@@ -370,6 +370,8 @@ def repo_check_single(
         files_changed = comparison.get("files", [])
         prev_index = get_tree_index(owner, repo_name, prev_sha)
         new_index= get_tree_index(owner, repo_name, sha)
+        print("prev", prev_index)
+        print("new", new_index)
 
         events = classify_files_events(files_changed, prev_index, new_index)
 
@@ -487,17 +489,25 @@ def compare_reference(
         "reference_file_parse_error": [],
     }
 
+    print(
+        f"Comparing reference branch '{reference_branch}' against working branch '{working_branch}' for repo {owner}/{repo_name}."
+    )
     working_sha = get_latest_commit(owner, repo_name, working_branch).get("sha")
     working_tree = get_tree_index(owner, repo_name, working_sha)
     working_root_files = working_tree.get(".", []) or []
+    print(working_sha)
+    print(working_tree)
+    print(working_root_files)
 
     ref_sha = get_latest_commit(owner, repo_name, reference_branch).get("sha")
     ref_tree = get_tree_index(owner, repo_name, ref_sha)
     ref_root_files = ref_tree.get(".", []) or []
+    print(ref_sha)
+    print(ref_tree)
+    print(ref_root_files)
 
     dir_mapping = {}
     dir_mapping_lower = {}
-    print(working_root_files)
     for dir_name, files in (working_root_files or {}).items():
         dir_mapping[dir_name] = set(files or [])
         dir_name_lower = dir_name.lower()
