@@ -17,9 +17,11 @@ from prefect.variables import Variable
 GITHUB_API_BASE = "https://api.github.com"
 REPOS_BASE = Path("repos_cache")
 STATE_VARIABLE_NAME = "repo_watcher_state"
+RECOMMENDATIONS_VARIABLE_NAME = "repo_watcher_recommendations"
+REPO_WATCHER_TAG = "repo_watcher"
 
 
-def load_state_variable() -> dict[str, Any]:
+def load_variable(variable: str) -> dict[str, Any]:
     """
     """
     try:
@@ -33,13 +35,14 @@ def load_state_variable() -> dict[str, Any]:
     except Exception:
         return {}
 
-def save_state_variable(state: dict[str, Any]):
+def save_variable(variable: str, value: dict[str, Any]):
     """
     """
     try:
         Variable.set(
-            STATE_VARIABLE_NAME,
-            state,
+            variable,
+            value,
+            tags=[REPO_WATCHER_TAG],
             overwrite=True,
         )
     except Exception as exc:
@@ -307,8 +310,6 @@ def repo_check_single(
     working_branch: str,
     reference_branch: str | None,
     project: str,
-    state_path: Path,
-    reco_path: Path,
 ) -> dict:
     """
     Check a single repository for updates based on the provided configuration.
@@ -326,14 +327,11 @@ def repo_check_single(
         dict: A dictionary containing the results of the check.
     """
 
-    state = load_state_variable()
+    state = load_variable(STATE_VARIABLE_NAME)
     repo_key = f"{owner}/{repo_name}@{working_branch}"
-    print(state)
-    print(repo_key)
     repo_state = state.get(repo_key, None)
-    print(repo_state)
 
-    reco = (read_yaml(reco_path) or {}).get("globals", {}) or {}
+    recommendations = load_variable(RECOMMENDATIONS_VARIABLE_NAME)
 
     try:
         latest = get_latest_commit(owner, repo_name, working_branch)
@@ -347,7 +345,6 @@ def repo_check_single(
     sha = latest.get("sha")
     prev_sha = repo_state.get("sha") if repo_state else None
     date = latest.get("date")
-    date_now = datetime.now(timezone.utc)
 
     changed = False
     events = {}
@@ -385,7 +382,7 @@ def repo_check_single(
         for event_type, event_list in events.items():
             if not event_list:
                 continue
-            templates = (reco.get(recommendation_type) or {}).get(event_type, [])
+            templates = (recommendations.get(recommendation_type) or {}).get(event_type, [])
             for occ in event_list:
                 context_ev = {
                     "repo": repo_name,
@@ -456,7 +453,7 @@ def repo_check_single(
     state[repo_key] = {
         "sha": sha,
     }
-    save_state_variable(state)
+    save_variable(STATE_VARIABLE_NAME, state)
 
     return {
         "owner": owner,
@@ -872,8 +869,6 @@ def repos_check_flow(
             working_branch,
             reference_branch,
             project,
-            state_path,
-            reco_path,
         )
 
         if check_result and check_result.get("changed") is False:
