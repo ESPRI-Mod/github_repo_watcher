@@ -462,6 +462,11 @@ def repo_check_single(
         description=f"Report for {owner}/{repo_name}@{working_branch}",
     )
 
+    state[repo_key] = {
+        "sha": sha,
+    }
+    save_state_variable(state)
+
     return {
         "owner": owner,
         "repo": repo_name,
@@ -880,7 +885,7 @@ def repos_check_flow(
             reco_path,
         )
 
-        if check_result and check_result.get("cancelled"):
+        if check_result and check_result.get("changed") is False:
             with get_client(sync_client=True) as client:
                 client.set_task_run_state(
                     task_run_id=check_result.get("task_run_id"),
