@@ -47,7 +47,8 @@ def save_state_variable(state: dict[str, Any]):
     try:
         Variable.set(
             STATE_VARIABLE_NAME,
-            yaml.safe_dump(state, sort_keys=True, allow_unicode=True),
+            state,
+            overwrite=True,
         )
     except Exception as exc:
         print(f"⚠️ Failed to save state variable: {exc}")
