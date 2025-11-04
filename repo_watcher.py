@@ -92,12 +92,11 @@ def get_or_clone_repo(owner: str, repo: str, remote_url: str | None = None) -> R
             remote_url = f"https://github.com/{owner}/{repo}.git"
         Repo.clone_from(remote_url, repo_path)
 
+    r = Repo(repo_path)
+
     _fetch(repo_path)
 
-    return Repo(repo_path)
-
-
-
+    return r
 
 
 # --------------------------------------------------------------------
