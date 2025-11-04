@@ -18,11 +18,6 @@ from prefect.variables import Variable
 
 
 GITHUB_API_BASE = "https://api.github.com"
-# GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-# HEADERS = {"Accept": "application/vnd.github+json"}
-# if GITHUB_TOKEN:
-#     HEADERS["Authorization"] = f"Bearer {GITHUB_TOKEN}"
-# HTTP_TIMEOUT = 30
 REPOS_BASE = Path("repos_cache")
 STATE_VARIABLE_NAME = "repo_watcher_state"
 
