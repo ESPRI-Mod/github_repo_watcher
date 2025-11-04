@@ -94,7 +94,7 @@ def get_or_clone_repo(owner: str, repo: str, remote_url: str | None = None) -> R
 
     r = Repo(repo_path)
 
-    _fetch(repo_path)
+    _fetch(r)
 
     return r
 
