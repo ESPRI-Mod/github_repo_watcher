@@ -1,11 +1,8 @@
-import base64
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
-import requests
 import yaml
 from collections import defaultdict
 from git import Repo, GitCommandError
