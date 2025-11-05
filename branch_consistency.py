@@ -1,21 +1,23 @@
 import json
 import shutil
-from enum import Enum, auto
+from enum import StrEnum, auto
 from functools import cached_property
 from pathlib import Path
 from typing import Self
 
+from prefect import flow, get_run_logger, task
 from prefect.runner.storage import GitRepository
+from prefect.runtime import flow_run
 from prefect.utilities.asyncutils import run_coro_as_sync
 from pydantic import BaseModel
 
 
-class Status(Enum):
+class Status(StrEnum):
     inconsistent = auto()
     consistent = auto()
 
 
-class Form(Enum):
+class Form(StrEnum):
     esgvoc = auto()
     legacy = auto()
 
@@ -68,7 +70,9 @@ class Repo(BaseModel):
 
     @property
     def nicename(self) -> str:
-        return f"{self.url}@{self.branch}"
+        _, owner, repo = self.url.rsplit("/", 2)
+        repo = repo.replace(".git", "")
+        return f"{owner}/{repo}@{self.branch}"
 
 
 @task
@@ -120,12 +124,23 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
     return result
 
 
+@task
+def send_to_nocodb(repo_a: Repo, repo_b: Repo, status: Status):
+    run_id = flow_run.id
+    ui_url = flow_run.get_flow_run_ui_url()
+    requests.post(..., body={...})
+    logger.info()
+
+
 @flow
-def are_branch_consistent(repoA: Repo, repoB: Repo) -> Status:
-    repoA.pull()
-    repoB.pull()
-    if repoA.terms == repoB.terms:
-        return Status.consistent
-    logger.error(f"Terms in {repoA.nicename} not in {repoB.nicename}: {repoA.terms - repoB.terms}")
-    logger.error(f"Terms in {repoB.nicename} not in {repoA.nicename}: {repoB.terms - repoA.terms}")
-    return Status.inconsistent
+def are_branch_consistent(repo_a: Repo, repo_b: Repo):
+    logger = get_run_logger()
+    repo_a.pull()
+    repo_b.pull()
+    if repo_a.terms == repo_b.terms:
+        status = Status.consistent
+    else:
+        logger.error(f"Terms in {repo_a.nicename} not in {repo_b.nicename}: {repo_a.terms - repo_b.terms}")
+        logger.error(f"Terms in {repo_b.nicename} not in {repo_a.nicename}: {repo_b.terms - repo_a.terms}")
+        status = Status.inconsistent
+    send_to_nocodb(repo_a, repo_b, status)
