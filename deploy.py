@@ -1,4 +1,5 @@
 import yaml
+from datetime import timedelta
 from prefect import flow
 from prefect_github import GitHubCredentials, GitHubRepository
 
@@ -37,7 +38,7 @@ if __name__ == "__main__":
         name = repo_a.nicename.replace("/", "-")
         code.deploy(
             name,
-            work_pool_name="process",
+            work_pool_name="alaupin-spiritx",
             tags=[
                 "consistency",
                 repo_a.nicename,
@@ -47,4 +48,5 @@ if __name__ == "__main__":
                 repo_a.nicename.split("@")[0],
             ],
             parameters={"repo_a": repo_a, "repo_b": repo_b},
+            cron="0 6 * * *",
         )
