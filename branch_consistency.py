@@ -129,7 +129,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 
 
 @task
-def send_to_nocodb(repo_working: Repo, repo_reference: Repo, status: Status, operation: str):
+def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
     API_KEY = Secret.load("nocodb-consistency-api-key").get()
     HEADERS    = {"xc-token": API_KEY, "Content-Type": "application/json"}
     BASE_URL   = Variable.get("nocodb_base_url")
@@ -140,8 +140,7 @@ def send_to_nocodb(repo_working: Repo, repo_reference: Repo, status: Status, ope
         "repository": repo_working.nicename.split("@")[0],
         "working_branch": repo_working.branch,
         "reference_branch": repo_reference.branch,
-        "is_consistent": status,
-        "is_verified": status,
+        "is_verified": False,
         "task_url": flow_run.get_flow_run_ui_url(),
     }
 
@@ -178,4 +177,4 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
         logger.error(format_output(repo_working, repo_reference))
         logger.error(format_output(repo_reference, repo_working))
         status = Status.inconsistent
-    send_to_nocodb(repo_working, repo_reference, status, "consistency")
+        send_to_nocodb(repo_working, repo_reference)
