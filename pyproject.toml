@@ -5,7 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "prefect>=3.4.13",
+    "gitpython>=3.1.45",
+    "prefect[github]<3.3",
     "pyyaml>=6.0.2",
     "requests>=2.32.5",
+]
+
+[dependency-groups]
+dev = [
+    "ipython<9",
+    "jupyter-console>=6.6.3",
 ]
