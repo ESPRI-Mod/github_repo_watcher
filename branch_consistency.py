@@ -1,3 +1,4 @@
+from collections import defaultdict
 import json
 import shutil
 from enum import StrEnum, auto
@@ -126,10 +127,29 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 
 @task
 def send_to_nocodb(repo_a: Repo, repo_b: Repo, status: Status):
-    run_id = flow_run.id
-    ui_url = flow_run.get_flow_run_ui_url()
-    requests.post(..., body={...})
-    logger.info()
+    # run_id = flow_run.id
+    # ui_url = flow_run.get_flow_run_ui_url()
+    # requests.post(..., body={...})
+    # logger.info()
+    ...
+
+
+def format_output(repo1: Repo, repo2: Repo) -> str:
+    f"Terms in {repo1.nicename} not in {repo2.nicename}:"
+    missing_terms = repo1.terms - repo2.terms
+
+    grouped_terms = defaultdict(list)
+    for term in missing_terms:
+        grouped_terms[term.collection].append(term.name)
+
+    lines = [f"Terms in {repo1.nicename} not in {repo2.nicename}:"]
+    for collection in sorted(grouped_terms.keys()):
+        terms = grouped_terms[collection]
+        lines.append(f"{collection}:")
+        for term_name in sorted(terms):
+            lines.append(f"- {term_name}")
+    
+    return "\n".join(lines)
 
 
 @flow
@@ -140,7 +160,7 @@ def are_branch_consistent(repo_a: Repo, repo_b: Repo):
     if repo_a.terms == repo_b.terms:
         status = Status.consistent
     else:
-        logger.error(f"Terms in {repo_a.nicename} not in {repo_b.nicename}: {repo_a.terms - repo_b.terms}")
-        logger.error(f"Terms in {repo_b.nicename} not in {repo_a.nicename}: {repo_b.terms - repo_a.terms}")
+        logger.error(format_output(repo_a, repo_b))
+        logger.error(format_output(repo_b, repo_a))
         status = Status.inconsistent
-    send_to_nocodb(repo_a, repo_b, status)
+    # send_to_nocodb(repo_a, repo_b, status)
