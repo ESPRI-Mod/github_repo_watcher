@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Self
 
 from prefect import flow, get_run_logger, task
-from prefect.variables import Variables
+from prefect.variables import Variable
 from prefect.runner.storage import GitRepository
 from prefect.runtime import flow_run
 from prefect.utilities.asyncutils import run_coro_as_sync
@@ -132,8 +132,8 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 def send_to_nocodb(repo_working: Repo, repo_reference: Repo, status: Status, operation: str):
     API_KEY = Secret.load("nocodb-consistency-api-key").get()
     HEADERS    = {"xc-token": API_KEY, "Content-Type": "application/json"}
-    BASE_URL   = Variables().get("nocodb_base_url")
-    TABLE_ID = Variables().get("nocodb_base_url")[operation]
+    BASE_URL   = Variable.get("nocodb_base_url")
+    TABLE_ID = Variable.get("nocodb_repo_watcher_tables_ids")
     TABLE_URL = f"{BASE_URL}/{TABLE_ID}/records"
 
     payload = {
