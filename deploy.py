@@ -24,29 +24,29 @@ if __name__ == "__main__":
         else:
             main_form = Form.legacy
 
-        repo_a = Repo(
+        repo_working = Repo(
             url=f"https://github.com/{config['owner']}/{config['repo']}",
             branch=config["working_branch"],
             form=Form.esgvoc,
         )
-        repo_b = Repo(
+        repo_reference = Repo(
             url=f"https://github.com/{config['owner']}/{config['repo']}",
             branch=config["reference_branch"],
             form=main_form,
         )
 
-        name = repo_a.nicename.replace("/", "-")
+        name = repo_working.nicename.replace("/", "-")
         code.deploy(
             name,
             work_pool_name="alaupin-spiritx",
             tags=[
                 "consistency",
-                repo_a.nicename,
-                repo_b.nicename,
-                repo_a.branch,
-                repo_b.branch,
-                repo_a.nicename.split("@")[0],
+                repo_working.nicename,
+                repo_reference.nicename,
+                repo_working.branch,
+                repo_reference.branch,
+                repo_working.nicename.split("@")[0],
             ],
-            parameters={"repo_a": repo_a, "repo_b": repo_b},
+            parameters={"repo_working": repo_working, "repo_reference": repo_reference},
             cron="0 6 * * *",
         )
