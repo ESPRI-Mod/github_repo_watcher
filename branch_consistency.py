@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Self
 
 from prefect import flow, get_run_logger, task
+from prefect.variables import Variables
 from prefect.runner.storage import GitRepository
 from prefect.runtime import flow_run
 from prefect.utilities.asyncutils import run_coro_as_sync
+from prefect.blocks.system import Secret
 from pydantic import BaseModel
+import requests
 
 
 class Status(StrEnum):
@@ -126,12 +129,24 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 
 
 @task
-def send_to_nocodb(repo_a: Repo, repo_b: Repo, status: Status):
-    # run_id = flow_run.id
-    # ui_url = flow_run.get_flow_run_ui_url()
-    # requests.post(..., body={...})
-    # logger.info()
-    ...
+def send_to_nocodb(repo_working: Repo, repo_reference: Repo, status: Status, operation: str):
+    API_KEY = Secret.load("nocodb-consistency-api-key").get()
+    HEADERS    = {"xc-token": API_KEY, "Content-Type": "application/json"}
+    BASE_URL   = Variables().get("nocodb_base_url")
+    TABLE_ID = Variables().get("nocodb_base_url")[operation]
+    TABLE_URL = f"{BASE_URL}/{TABLE_ID}/records"
+
+    payload = {
+        "repository": repo_working.nicename.split("@")[0],
+        "working_branch": repo_working.branch,
+        "reference_branch": repo_reference.branch,
+        "is_consistent": status,
+        "is_verified": status,
+        "task_url": flow_run.get_flow_run_ui_url(),
+    }
+
+    r_post = requests.post(TABLE_URL, json=payload, headers=HEADERS)
+    r_post.raise_for_status()
 
 
 def format_output(repo1: Repo, repo2: Repo) -> str:
@@ -147,20 +162,20 @@ def format_output(repo1: Repo, repo2: Repo) -> str:
         terms = grouped_terms[collection]
         lines.append(f"{collection}:")
         for term_name in sorted(terms):
-            lines.append(f"- {term_name}")
+            lines.append(f"\t- {term_name}")
     
     return "\n".join(lines)
 
 
 @flow
-def are_branch_consistent(repo_a: Repo, repo_b: Repo):
+def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     logger = get_run_logger()
-    repo_a.pull()
-    repo_b.pull()
-    if repo_a.terms == repo_b.terms:
+    repo_working.pull()
+    repo_reference.pull()
+    if repo_working.terms == repo_reference.terms:
         status = Status.consistent
     else:
-        logger.error(format_output(repo_a, repo_b))
-        logger.error(format_output(repo_b, repo_a))
+        logger.error(format_output(repo_working, repo_reference))
+        logger.error(format_output(repo_reference, repo_working))
         status = Status.inconsistent
-    # send_to_nocodb(repo_a, repo_b, status)
+    send_to_nocodb(repo_working, repo_reference, status, "consistency")
