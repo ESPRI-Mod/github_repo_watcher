@@ -1,3 +1,4 @@
+from prefect.runner.storage import GitRepository
 import yaml
 from datetime import timedelta
 from prefect import flow
@@ -11,9 +12,15 @@ if __name__ == "__main__":
 
     github_credentials_block = GitHubCredentials.load("github-repoc-checker")
     github_storage = GitHubRepository.load("repo-watcher")
-    github_storage.reference = "dev-simple"
-    github_storage.save(overwrite=True)
-    code = flow.from_source(github_storage, entrypoint="branch_consistency.py:are_branch_consistent")
+    git_storage = GitRepository(
+        url=github_storage.repository_url,
+        branch=github_storage.reference,
+        credentials=github_credentials_block,
+    )
+
+    code = flow.from_source(
+        git_storage, entrypoint="branch_consistency.py:are_branch_consistent"
+    )
 
     deployments = []
     for config in configs:
