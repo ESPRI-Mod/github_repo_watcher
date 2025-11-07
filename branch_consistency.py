@@ -120,11 +120,11 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                 continue
             term_data = data[collection]
             if collection in ["license"]:
-                term_data = term_data[collection]
+                term_data = term_data["license_options"]
             if isinstance(term_data, list):
                 term_keys = [term.replace(" ", "") for term in term_data]
             elif isinstance(term_data, dict):
-                term_keys = list(term_data.keys())
+                term_keys = list(term.replace(" ", "") for term in term_data.keys())
             elif isinstance(term_data, str):
                 term_keys = [term_data]
             else:
