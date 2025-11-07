@@ -15,6 +15,15 @@ from prefect.blocks.system import Secret
 from pydantic import BaseModel
 import requests
 
+# ESGVOC_EXCLUDED_COLLECTIONS = [
+#     "variable_id"
+# ]
+LEGACY_EXCLUDED_COLLECTIONS = [
+    "DRS",
+    "required_global_attributes",
+    "global_attrs",
+]
+
 
 class Status(StrEnum):
     inconsistent = auto()
@@ -102,7 +111,7 @@ def parse_esgvoc_terms(repo: Repo) -> set[Term]:
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     result = set()
     for collection_path in repo.destination.glob("*.json"):
-        if "global_attrs" in collection_path.name:
+        if any(collection in collection_path.name for collection in LEGACY_EXCLUDED_COLLECTIONS):
             continue
         contents = collection_path.read_text()
         data = json.loads(contents)
@@ -110,6 +119,8 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
             if collection in ["Header", "version_metadata"]:
                 continue
             term_data = data[collection]
+            if collection in ["license"]:
+                term_data = term_data[collection]
             if isinstance(term_data, list):
                 term_keys = [term.replace(" ", "") for term in term_data]
             elif isinstance(term_data, dict):
@@ -174,7 +185,7 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     if repo_working.terms == repo_reference.terms:
         status = Status.consistent
     else:
-        logger.error(format_output(repo_working, repo_reference))
+        # logger.error(format_output(repo_working, repo_reference))
         logger.error(format_output(repo_reference, repo_working))
         status = Status.inconsistent
         send_to_nocodb(repo_working, repo_reference)
