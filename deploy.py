@@ -1,9 +1,9 @@
 from typing import Any, override
 from prefect.runner.storage import GitRepository
 import yaml
-from datetime import timedelta
 from prefect import flow
-from prefect_github import GitHubCredentials, GitHubRepository
+from prefect_github import GitHubRepository
+from pydantic import BaseModel
 
 from branch_consistency import Form, Repo
 
@@ -42,7 +42,6 @@ if __name__ == "__main__":
     with open("repos_config.yml") as f:
         configs: list[Config] = [Config(**config) for config in yaml.safe_load(f)["repos"]]
 
-    github_credentials_block = GitHubCredentials.load("github-repoc-checker")
     github_storage = GitHubRepository.load("repo-watcher")
     git_storage = SpiritGitRepository(
         url=github_storage.repository_url,
