@@ -15,6 +15,10 @@ from prefect.blocks.system import Secret
 from pydantic import BaseModel
 import requests
 
+from esgvoc.core.service.state import ServiceSettings
+from esgvoc.core.service import config_manager, current_state
+import esgvoc.api as ev
+
 # ESGVOC_EXCLUDED_COLLECTIONS = [
 #     "variable_id"
 # ]
@@ -108,6 +112,21 @@ def parse_esgvoc_terms(repo: Repo) -> set[Term]:
 
 
 @task
+def validate_legacy_terms(repo: Repo) -> set[Term]:
+    valid_terms: set[Term] = set()
+    invalid_terms: set[Term] = set()
+    for term in repo.terms:
+        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.name)
+        if matching_term:
+            term.name = matching_term[0].term_id
+            valid_terms.add(term)
+        else:
+            invalid_terms.add(term)
+    repo.terms = valid_terms
+    return invalid_terms
+
+
+@task
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     result = set()
     for collection_path in repo.destination.glob("*.json"):
@@ -159,7 +178,7 @@ def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
     r_post.raise_for_status()
 
 
-def format_output(repo1: Repo, repo2: Repo) -> str:
+def format_output(repo1: Repo, repo2: Repo, invalid_legacy_terms: set[Term]) -> str:
     f"Terms in {repo1.nicename} not in {repo2.nicename}:"
     missing_terms = repo1.terms - repo2.terms
 
@@ -173,19 +192,45 @@ def format_output(repo1: Repo, repo2: Repo) -> str:
         lines.append(f"{collection}:")
         for term_name in sorted(terms):
             lines.append(f"\t- {term_name}")
-    
+
     return "\n".join(lines)
+
+
+@task
+def config_esgvoc():
+    dico = {
+        "universe": {
+            "github_repo": "https://github.com/WCRP-CMIP/WCRP-universe",
+            "branch": "esgvoc",
+            "local_path": "repos/WCRP-universe",
+            "db_path": "dbs/universe.sqlite",
+            "offline_mode": False,
+        },
+        "projects": [
+            ServiceSettings._get_default_project_configs()[proj_id]
+            for proj_id in ServiceSettings._get_default_project_configs().keys()
+        ],
+    }
+
+    config_manager.save_config(
+        dico, "coherence"
+    )  # save le dico dans la config (toml) puis switch sur cette config
+    current_state.synchronize_all()
 
 
 @flow
 def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     logger = get_run_logger()
+    config_esgvoc()
     repo_working.pull()
     repo_reference.pull()
-    if repo_working.terms == repo_reference.terms:
+    invalid_legacy_terms = validate_legacy_terms(repo_reference)
+
+    if repo_working.terms == repo_reference.terms and not invalid_legacy_terms:
         status = Status.consistent
     else:
         # logger.error(format_output(repo_working, repo_reference))
-        logger.error(format_output(repo_reference, repo_working))
+        logger.error(format_output(repo_reference, repo_working, invalid_legacy_terms))
+        logger.error(invalid_legacy_terms)
         status = Status.inconsistent
         send_to_nocodb(repo_working, repo_reference)
