@@ -131,7 +131,10 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     result: set[Term] = set()
     for collection_path in repo.destination.glob("*.json"):
-        if any(collection in collection_path.name for collection in LEGACY_EXCLUDED_COLLECTIONS):
+        if any(
+            collection in collection_path.name
+            for collection in LEGACY_EXCLUDED_COLLECTIONS
+        ):
             continue
         contents = collection_path.read_text()
         data = json.loads(contents)
