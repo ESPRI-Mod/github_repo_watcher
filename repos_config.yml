@@ -19,11 +19,11 @@ repos:
     working_branch: esgvoc
     reference_branch: main
     project: input4MIPs
-  - owner: ltroussellier
-    repo: obs4MIPs_CVs
-    working_branch: REF
-    reference_branch: main
-    project: obs4MIPs
+  - owner: Climate-REF
+    repo: Obs4REF_CVs
+    working_branch: main
+    reference_branch: null
+    project: obs4REF
   - owner: WCRP-CMIP
     repo: CMIP6Plus_CVs
     working_branch: esgvoc
@@ -43,4 +43,5 @@ repos:
     repo: CMIP7_CVs
     working_branch: main
     reference_branch: null
-    project: CMIP7      
+    project: CMIP7
+
