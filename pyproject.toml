@@ -11,8 +11,3 @@ dependencies = [
     "requests>=2.32.5",
 ]
 
-[dependency-groups]
-dev = [
-    "ipython<9",
-    "jupyter-console>=6.6.3",
-]
