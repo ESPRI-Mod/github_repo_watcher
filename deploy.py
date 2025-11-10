@@ -30,16 +30,24 @@ class SpiritGitRepository(GitRepository):
         ]
 
 
+class Config(BaseModel):
+    owner: str
+    repo: str
+    working_branch: str
+    reference_branch: str | None = None
+    project: str
+
+
 if __name__ == "__main__":
     with open("repos_config.yml") as f:
-        configs = yaml.safe_load(f)["repos"]
+        configs: list[Config] = [Config(**config) for config in yaml.safe_load(f)["repos"]]
 
     github_credentials_block = GitHubCredentials.load("github-repoc-checker")
     github_storage = GitHubRepository.load("repo-watcher")
     git_storage = SpiritGitRepository(
         url=github_storage.repository_url,
         branch=github_storage.reference,
-        credentials=github_credentials_block,
+        credentials=github_storage.credentials,
     )
 
     code = flow.from_source(
@@ -48,22 +56,24 @@ if __name__ == "__main__":
 
     deployments = []
     for config in configs:
-        if config["reference_branch"] is None:
+        if config.reference_branch is None:
             continue
-        if config["working_branch"] == "REF":
+        if config.working_branch == "REF":
             main_form = Form.esgvoc
         else:
             main_form = Form.legacy
 
         repo_working = Repo(
-            url=f"https://github.com/{config['owner']}/{config['repo']}",
-            branch=config["working_branch"],
+            url=f"https://github.com/{config.owner}/{config.repo}",
+            branch=config.working_branch,
             form=Form.esgvoc,
+            project=config.project,
         )
         repo_reference = Repo(
-            url=f"https://github.com/{config['owner']}/{config['repo']}",
-            branch=config["reference_branch"],
+            url=f"https://github.com/{config.owner}/{config.repo}",
+            branch=config.reference_branch,
             form=main_form,
+            project=config.project,
         )
 
         name = repo_working.nicename.replace("/", "-")
