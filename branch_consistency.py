@@ -1,4 +1,5 @@
 from collections import defaultdict
+from esgvoc.api.search import MatchingTerm
 import json
 import shutil
 from enum import StrEnum, auto
@@ -142,8 +143,8 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
             if collection in ["Header", "version_metadata"]:
                 continue
             term_data = data[collection]
-            if collection in ["license"]:
-                term_data = term_data["license_options"]
+            # if collection in ["license"]:
+            #     term_data = term_data["license_options"]
             if isinstance(term_data, list):
                 term_keys = [term.replace(" ", "") for term in term_data]
             elif isinstance(term_data, dict):
