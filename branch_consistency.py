@@ -4,7 +4,7 @@ import shutil
 from enum import StrEnum, auto
 from functools import cached_property
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 from prefect import flow, get_run_logger, task
 from prefect.variables import Variable
@@ -60,6 +60,7 @@ class Repo(BaseModel):
     url: str
     branch: str
     form: Form
+    project: str
     # local_path: Path | None = None
 
     @property
@@ -94,7 +95,7 @@ class Repo(BaseModel):
 
 @task
 def parse_esgvoc_terms(repo: Repo) -> set[Term]:
-    result = set()
+    result: set[Term] = set()
     for term_path in repo.destination.glob("*/*.json"):
         if term_path.parent.name[0] in ["_", "."]:
             continue
@@ -128,7 +129,7 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 
 @task
 def parse_legacy_terms(repo: Repo) -> set[Term]:
-    result = set()
+    result: set[Term] = set()
     for collection_path in repo.destination.glob("*.json"):
         if any(collection in collection_path.name for collection in LEGACY_EXCLUDED_COLLECTIONS):
             continue
@@ -161,8 +162,8 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 @task
 def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
     API_KEY = Secret.load("nocodb-consistency-api-key").get()
-    HEADERS    = {"xc-token": API_KEY, "Content-Type": "application/json"}
-    BASE_URL   = Variable.get("nocodb_base_url")
+    HEADERS = {"xc-token": API_KEY, "Content-Type": "application/json"}
+    BASE_URL = Variable.get("nocodb_base_url")
     TABLE_ID = Variable.get("nocodb_repo_watcher_tables_ids")
     TABLE_URL = f"{BASE_URL}/{TABLE_ID}/records"
 
