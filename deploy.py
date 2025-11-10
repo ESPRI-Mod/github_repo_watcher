@@ -89,5 +89,5 @@ if __name__ == "__main__":
                 repo_working.nicename.split("@")[0],
             ],
             parameters={"repo_working": repo_working, "repo_reference": repo_reference},
-            cron="0 6 * * *",
+            cron="0 6 * * 1-5",
         )
