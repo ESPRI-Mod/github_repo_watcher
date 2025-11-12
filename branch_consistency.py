@@ -244,9 +244,10 @@ def config_esgvoc():
     current_state.synchronize_all()
 
 
-@flow
+@flow(log_prints=True)
 def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
-    logger = get_run_logger()
+    import logging
+    logger = logging.getLogger("prefect.flow")
     config_esgvoc()
     repo_working.pull()
     repo_reference.pull()
