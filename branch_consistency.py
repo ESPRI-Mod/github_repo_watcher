@@ -113,7 +113,7 @@ def parse_esgvoc_terms(repo: Repo) -> set[Term]:
     return result
 
 
-@task
+@task(log_prints=True)
 def validate_legacy_terms(repo: Repo) -> set[Term]:
     valid_terms: set[Term] = set()
     invalid_terms: set[Term] = set()
@@ -134,7 +134,7 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     return invalid_terms
 
 
-@task
+@task(log_prints=True)
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     logger = get_run_logger()
     print("Parsing legacy terms from repo: %s", repo.nicename)
@@ -183,7 +183,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
     return result
 
 
-@task
+@task(log_prints=True)
 def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
     API_KEY = Secret.load("nocodb-consistency-api-key").get()
     HEADERS = {"xc-token": API_KEY, "Content-Type": "application/json"}
