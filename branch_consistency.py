@@ -131,6 +131,7 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 @task
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     logger = get_run_logger()
+    logger.info("Parsing legacy terms from repo: %s", repo.nicename)
     result: set[Term] = set()
     for collection_path in repo.destination.glob("*.json"):
         logger.info("Processing legacy collection file: %s", collection_path)
@@ -162,8 +163,9 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                 term_keys = [term_data]
                 logger.info("\t\tExtracted single term from string.")
             else:
-                raise TypeError(term_data)
                 logger.error("\t\tUnknown term data type for collection %s: %s", collection, type(term_data))
+                raise TypeError(term_data)
+                
             for term_key in term_keys:
                 result.add(
                     Term(
