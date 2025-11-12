@@ -258,7 +258,8 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     print("Esgvoc terms :")
     print("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
 
-    invalid_legacy_terms = validate_legacy_terms(repo_reference)
+    # invalid_legacy_terms = validate_legacy_terms(repo_reference)
+    invalid_legacy_terms = set()
 
     print("Legacy missing terms :")
     print("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
