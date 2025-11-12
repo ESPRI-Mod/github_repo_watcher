@@ -244,7 +244,7 @@ def config_esgvoc():
     current_state.synchronize_all()
 
 
-@flow(log_prints=True)
+@flow
 def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     logger = get_run_logger()
     config_esgvoc()
