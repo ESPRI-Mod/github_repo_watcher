@@ -236,6 +236,12 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     else:
         # logger.error(format_output(repo_working, repo_reference))
         logger.error(format_output(repo_reference, repo_working, invalid_legacy_terms))
+        logger.debug("Legacy terms :")
+        logger.debug(f"{term.collection} | {term.name}\n" for term in repo_reference.terms)
+        logger.debug("Esgvoc terms :")
+        logger.debug(f"{term.collection} | {term.name}\n" for term in repo_working.terms)
+        logger.debug("Legacy missing terms :")
+        logger.debug(f"{term.collection} | {term.name}\n" for term in invalid_legacy_terms)
         logger.error(invalid_legacy_terms)
         status = Status.inconsistent
         send_to_nocodb(repo_working, repo_reference)
