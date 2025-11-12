@@ -121,7 +121,7 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     logger.error("Validating legacy terms from repo: %s", repo.nicename)
     for term in repo.terms:
         logger.error("Validating term: %s | %s", term.collection, term.name)
-        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.name)
+        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.collection)
         if matching_term:
             logger.error("\tFound matching term for: %s | %s -> %s", term.collection, term.name, matching_term[0].term_id)
             term.name = matching_term[0].term_id
