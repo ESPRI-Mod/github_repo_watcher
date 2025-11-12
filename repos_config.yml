@@ -28,7 +28,7 @@ repos:
     repo: CMIP6Plus_CVs
     working_branch: esgvoc
     reference_branch: main
-    project: CMIP6Plus
+    project: cmip6plus
   - owner: WCRP-CMIP
     repo: CMIP6_CVs
     working_branch: esgvoc
