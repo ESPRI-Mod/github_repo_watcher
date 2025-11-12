@@ -137,40 +137,28 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 
 @task(log_prints=True)
 def parse_legacy_terms(repo: Repo) -> set[Term]:
-    logger = get_run_logger()
-    logger.error("Parsing legacy terms from repo: %s", repo.nicename)
     result: set[Term] = set()
     for collection_path in repo.destination.glob("*.json"):
-        logger.error("Processing legacy collection file: %s", collection_path)
         if any(
             collection in collection_path.name
             for collection in LEGACY_EXCLUDED_COLLECTIONS
         ):
-            logger.error("\tSkipping excluded collection file: %s", collection_path)
             continue
         contents = collection_path.read_text()
         data = json.loads(contents)
-        logger.error("\tLoaded data from file: %s", collection_path)
         for collection in data.keys():
-            logger.error("\tProcessing collection: %s", collection)
             if collection in ["Header", "version_metadata"]:
-                logger.error("\t\tSkipping non-term collection: %s", collection)
                 continue
             term_data = data[collection]
-            logger.error("\t\tTerm data type: %s", type(term_data))
             # if collection in ["license"]:
             #     term_data = term_data["license_options"]
             if isinstance(term_data, list):
                 term_keys = [term.replace(" ", "") for term in term_data]
-                logger.error("\t\tExtracted %d terms from list.", len(term_keys))
             elif isinstance(term_data, dict):
                 term_keys = list(term.replace(" ", "_") for term in term_data.keys())
-                logger.error("\t\tExtracted %d terms from dict.", len(term_keys))
             elif isinstance(term_data, str):
                 term_keys = [term_data]
-                logger.error("\t\tExtracted single term from string.")
             else:
-                logger.error("\t\tUnknown term data type for collection %s: %s", collection, type(term_data))
                 raise TypeError(term_data)
                 
             for term_key in term_keys:
@@ -180,7 +168,6 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                         collection=collection,
                     ),
                 )
-                logger.error("\t\tAdded term: %s | %s", collection, term_key)
     return result
 
 
@@ -252,16 +239,16 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     repo_working.pull()
     repo_reference.pull()
 
-    logger.error(repo_working)
-    logger.error(repo_reference)
+    # logger.error(repo_working)
+    # logger.error(repo_reference)
 
-    logger.error("Legacy terms :")
-    logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
+    # logger.error("Legacy terms :")
+    # logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
 
-    logger.error("Esgvoc terms :")
-    logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
+    # logger.error("Esgvoc terms :")
+    # logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
 
-    invalid_legacy_terms = set()
+    invalid_legacy_terms = validate_legacy_terms(repo_reference)
 
     logger.error("Legacy missing terms :")
     logger.error("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
