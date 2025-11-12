@@ -193,10 +193,10 @@ def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
 
 def format_output(repo1: Repo, repo2: Repo, invalid_legacy_terms: set[Term]) -> str:
     f"Terms in {repo1.nicename} not in {repo2.nicename}:"
-    missing_terms = repo1.terms - repo2.terms
+    # missing_terms = repo1.terms - repo2.terms
 
-    grouped_terms = defaultdict(list)
-    for term in missing_terms:
+    grouped_terms: defaultdict[Any, list[Any]] = defaultdict(list)
+    for term in invalid_legacy_terms:
         grouped_terms[term.collection].append(term.name)
 
     lines = [f"Terms in {repo1.nicename} not in {repo2.nicename}:"]
