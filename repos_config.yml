@@ -33,7 +33,7 @@ repos:
     repo: CMIP6_CVs
     working_branch: esgvoc
     reference_branch: main
-    project: CMIP6
+    project: cmip6
   - owner: WCRP-CMIP
     repo: Variable-Registry
     working_branch: main
