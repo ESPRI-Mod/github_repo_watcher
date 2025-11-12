@@ -245,12 +245,14 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     repo_reference.pull()
     logger.info(repo_working)
     logger.info(repo_reference)
-    invalid_legacy_terms = validate_legacy_terms(repo_reference)
+    
     logger.info("Legacy terms :")
     logger.info("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
 
     logger.info("Esgvoc terms :")
     logger.info("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
+
+    invalid_legacy_terms = validate_legacy_terms(repo_reference)
 
     logger.info("Legacy missing terms :")
     logger.info("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
