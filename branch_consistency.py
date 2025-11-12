@@ -1,4 +1,5 @@
 from collections import defaultdict
+from venv import logger
 from esgvoc.api.search import MatchingTerm
 import json
 import shutil
@@ -115,21 +116,22 @@ def parse_esgvoc_terms(repo: Repo) -> set[Term]:
 
 @task(log_prints=True)
 def validate_legacy_terms(repo: Repo) -> set[Term]:
+    logger = get_run_logger()
     valid_terms: set[Term] = set()
     invalid_terms: set[Term] = set()
-    print("Validating legacy terms from repo: %s", repo.nicename)
+    logger.error("Validating legacy terms from repo: %s", repo.nicename)
     for term in repo.terms:
-        print("Validating term: %s | %s", term.collection, term.name)
+        logger.error("Validating term: %s | %s", term.collection, term.name)
         matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.name)
         if matching_term:
-            print("\tFound matching term for: %s | %s -> %s", term.collection, term.name, matching_term[0].term_id)
+            logger.error("\tFound matching term for: %s | %s -> %s", term.collection, term.name, matching_term[0].term_id)
             term.name = matching_term[0].term_id
-            print("\tUpdated term name to: %s", term.name)
+            logger.error("\tUpdated term name to: %s", term.name)
             valid_terms.add(term)
         else:
-            print("\tNo matching term found for: %s | %s", term.collection, term.name)
+            logger.error("\tNo matching term found for: %s | %s", term.collection, term.name)
             invalid_terms.add(term)
-    print("Validation complete. Valid terms: %d, Invalid terms: %d", len(valid_terms), len(invalid_terms))
+    logger.error("Validation complete. Valid terms: %d, Invalid terms: %d", len(valid_terms), len(invalid_terms))
     repo.terms = valid_terms
     return invalid_terms
 
@@ -137,10 +139,10 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 @task(log_prints=True)
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     logger = get_run_logger()
-    print("Parsing legacy terms from repo: %s", repo.nicename)
+    logger.error("Parsing legacy terms from repo: %s", repo.nicename)
     result: set[Term] = set()
     for collection_path in repo.destination.glob("*.json"):
-        print("Processing legacy collection file: %s", collection_path)
+        logger.error("Processing legacy collection file: %s", collection_path)
         if any(
             collection in collection_path.name
             for collection in LEGACY_EXCLUDED_COLLECTIONS
@@ -149,25 +151,25 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
             continue
         contents = collection_path.read_text()
         data = json.loads(contents)
-        print("\tLoaded data from file: %s", collection_path)
+        logger.error("\tLoaded data from file: %s", collection_path)
         for collection in data.keys():
-            print("\tProcessing collection: %s", collection)
+            logger.error("\tProcessing collection: %s", collection)
             if collection in ["Header", "version_metadata"]:
-                print("\t\tSkipping non-term collection: %s", collection)
+                logger.error("\t\tSkipping non-term collection: %s", collection)
                 continue
             term_data = data[collection]
-            print("\t\tTerm data type: %s", type(term_data))
+            logger.error("\t\tTerm data type: %s", type(term_data))
             # if collection in ["license"]:
             #     term_data = term_data["license_options"]
             if isinstance(term_data, list):
                 term_keys = [term.replace(" ", "") for term in term_data]
-                print("\t\tExtracted %d terms from list.", len(term_keys))
+                logger.error("\t\tExtracted %d terms from list.", len(term_keys))
             elif isinstance(term_data, dict):
                 term_keys = list(term.replace(" ", "_") for term in term_data.keys())
-                print("\t\tExtracted %d terms from dict.", len(term_keys))
+                logger.error("\t\tExtracted %d terms from dict.", len(term_keys))
             elif isinstance(term_data, str):
                 term_keys = [term_data]
-                print("\t\tExtracted single term from string.")
+                logger.error("\t\tExtracted single term from string.")
             else:
                 logger.error("\t\tUnknown term data type for collection %s: %s", collection, type(term_data))
                 raise TypeError(term_data)
@@ -179,7 +181,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                         collection=collection,
                     ),
                 )
-                print("\t\tAdded term: %s | %s", collection, term_key)
+                logger.error("\t\tAdded term: %s | %s", collection, term_key)
     return result
 
 
@@ -249,20 +251,20 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     config_esgvoc()
     repo_working.pull()
     repo_reference.pull()
-    print(repo_working)
-    print(repo_reference)
+    logger.error(repo_working)
+    logger.error(repo_reference)
     
-    print("Legacy terms :")
-    print("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
+    logger.error("Legacy terms :")
+    logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
 
-    print("Esgvoc terms :")
-    print("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
+    logger.error("Esgvoc terms :")
+    logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
 
     # invalid_legacy_terms = validate_legacy_terms(repo_reference)
     invalid_legacy_terms = set()
 
-    print("Legacy missing terms :")
-    print("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
+    logger.error("Legacy missing terms :")
+    logger.error("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
     logger.error(invalid_legacy_terms)
 
     if repo_working.terms == repo_reference.terms and not invalid_legacy_terms:
