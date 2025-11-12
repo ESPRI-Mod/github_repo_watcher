@@ -1,5 +1,4 @@
 from collections import defaultdict
-from venv import logger
 from esgvoc.api.search import MatchingTerm
 import json
 import shutil
