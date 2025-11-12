@@ -246,31 +246,29 @@ def config_esgvoc():
 
 @flow(log_prints=True)
 def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
-    import logging
-    logger = logging.getLogger("prefect.flow")
+    logger = get_run_logger()
+
     config_esgvoc()
     repo_working.pull()
     repo_reference.pull()
+
     logger.error(repo_working)
     logger.error(repo_reference)
-    
+
     logger.error("Legacy terms :")
     logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
 
     logger.error("Esgvoc terms :")
     logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
 
-    # invalid_legacy_terms = validate_legacy_terms(repo_reference)
     invalid_legacy_terms = set()
 
     logger.error("Legacy missing terms :")
     logger.error("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
-    logger.error(invalid_legacy_terms)
 
     if repo_working.terms == repo_reference.terms and not invalid_legacy_terms:
         status = Status.consistent
     else:
-        # logger.error(format_output(repo_working, repo_reference))
         logger.error(format_output(repo_reference, repo_working, invalid_legacy_terms))
         status = Status.inconsistent
         send_to_nocodb(repo_working, repo_reference)
