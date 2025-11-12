@@ -117,13 +117,19 @@ def parse_esgvoc_terms(repo: Repo) -> set[Term]:
 def validate_legacy_terms(repo: Repo) -> set[Term]:
     valid_terms: set[Term] = set()
     invalid_terms: set[Term] = set()
+    print("Validating legacy terms from repo: %s", repo.nicename)
     for term in repo.terms:
+        print("Validating term: %s | %s", term.collection, term.name)
         matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.name)
         if matching_term:
+            print("\tFound matching term for: %s | %s -> %s", term.collection, term.name, matching_term[0].term_id)
             term.name = matching_term[0].term_id
+            print("\tUpdated term name to: %s", term.name)
             valid_terms.add(term)
         else:
+            print("\tNo matching term found for: %s | %s", term.collection, term.name)
             invalid_terms.add(term)
+    print("Validation complete. Valid terms: %d, Invalid terms: %d", len(valid_terms), len(invalid_terms))
     repo.terms = valid_terms
     return invalid_terms
 
