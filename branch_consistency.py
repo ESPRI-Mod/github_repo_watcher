@@ -130,29 +130,40 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 
 @task
 def parse_legacy_terms(repo: Repo) -> set[Term]:
+    logger = get_run_logger()
     result: set[Term] = set()
     for collection_path in repo.destination.glob("*.json"):
+        logger.info("Processing legacy collection file: %s", collection_path)
         if any(
             collection in collection_path.name
             for collection in LEGACY_EXCLUDED_COLLECTIONS
         ):
+            logger.error("\tSkipping excluded collection file: %s", collection_path)
             continue
         contents = collection_path.read_text()
         data = json.loads(contents)
+        logger.info("\tLoaded data from file: %s", collection_path)
         for collection in data.keys():
+            logger.info("\tProcessing collection: %s", collection)
             if collection in ["Header", "version_metadata"]:
+                logger.info("\t\tSkipping non-term collection: %s", collection)
                 continue
             term_data = data[collection]
+            logger.info("\t\tTerm data type: %s", type(term_data))
             # if collection in ["license"]:
             #     term_data = term_data["license_options"]
             if isinstance(term_data, list):
                 term_keys = [term.replace(" ", "") for term in term_data]
+                logger.info("\t\tExtracted %d terms from list.", len(term_keys))
             elif isinstance(term_data, dict):
                 term_keys = list(term.replace(" ", "_") for term in term_data.keys())
+                logger.info("\t\tExtracted %d terms from dict.", len(term_keys))
             elif isinstance(term_data, str):
                 term_keys = [term_data]
+                logger.info("\t\tExtracted single term from string.")
             else:
                 raise TypeError(term_data)
+                logger.error("\t\tUnknown term data type for collection %s: %s", collection, type(term_data))
             for term_key in term_keys:
                 result.add(
                     Term(
@@ -160,6 +171,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                         collection=collection,
                     ),
                 )
+                logger.info("\t\tAdded term: %s | %s", collection, term_key)
     return result
 
 
