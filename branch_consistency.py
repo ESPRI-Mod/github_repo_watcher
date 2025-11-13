@@ -80,7 +80,12 @@ class Repo(BaseModel):
 
     @property
     def destination(self) -> Path:
-        return self.git_repo.destination
+        dest = self.git_repo.destination
+
+        if self.project == "inputs4mip":
+            return dest / "CVs"
+        else:
+            return dest
 
     def pull(self) -> None:
         if self.destination.is_dir():
