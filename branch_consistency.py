@@ -138,7 +138,9 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 @task(log_prints=True)
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     result: set[Term] = set()
+    print(repo.destination)
     for collection_path in repo.destination.glob("*.json"):
+        print(collection_path)
         if any(
             collection in collection_path.name
             for collection in LEGACY_EXCLUDED_COLLECTIONS
