@@ -82,7 +82,7 @@ class Repo(BaseModel):
     def destination(self) -> Path:
         dest = self.git_repo.destination
 
-        if self.project == "inputs4mip":
+        if self.project == "input4mip":
             return dest / "CVs"
         else:
             return dest
