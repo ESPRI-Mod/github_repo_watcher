@@ -3,7 +3,7 @@ repos:
     repo: cordex-cmip6-cv
     working_branch: esgvoc
     reference_branch: main
-    project: CORDEX-CMIP6
+    project: cordex-cmip6
   - owner: alaupin-ipsl
     repo: CORDEX-CMIP6_CVs
     working_branch: test
