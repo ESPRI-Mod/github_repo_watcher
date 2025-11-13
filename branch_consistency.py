@@ -253,6 +253,8 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     repo_reference.pull()
 
     logger.error(repo_reference.destination)
+    for collection_path in repo_reference.destination.glob("*.json"):
+        logger.error(collection_path)
     # logger.error(repo_working)
     # logger.error(repo_reference)
 
