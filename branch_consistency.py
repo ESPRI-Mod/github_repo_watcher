@@ -137,10 +137,11 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 
 @task(log_prints=True)
 def parse_legacy_terms(repo: Repo) -> set[Term]:
+    logger = get_run_logger()
     result: set[Term] = set()
-    print(repo.destination)
+    logger.error(repo.destination)
     for collection_path in repo.destination.glob("*.json"):
-        print(collection_path)
+        logger.error(collection_path)
         if any(
             collection in collection_path.name
             for collection in LEGACY_EXCLUDED_COLLECTIONS
@@ -251,6 +252,7 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     repo_working.pull()
     repo_reference.pull()
 
+    logger.error(repo_reference.destination)
     # logger.error(repo_working)
     # logger.error(repo_reference)
 
