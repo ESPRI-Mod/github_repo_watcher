@@ -115,22 +115,17 @@ def parse_esgvoc_terms(repo: Repo) -> set[Term]:
 
 @task(log_prints=True)
 def validate_legacy_terms(repo: Repo) -> set[Term]:
-    logger = get_run_logger()
     valid_terms: set[Term] = set()
     invalid_terms: set[Term] = set()
-    logger.error("Validating legacy terms from repo: %s", repo.nicename)
     for term in repo.terms:
-        logger.error("Validating term: %s | %s", term.collection, term.name)
+        if repo.project == "cordex-cmip6" and term.collection == "table_id":
+            term.collection = "frequency"
         matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.collection)
         if matching_term:
-            logger.error("\tFound matching term for: %s | %s -> %s", term.collection, term.name, matching_term[0].term_id)
             term.name = matching_term[0].term_id
-            logger.error("\tUpdated term name to: %s", term.name)
             valid_terms.add(term)
         else:
-            logger.error("\tNo matching term found for: %s | %s", term.collection, term.name)
             invalid_terms.add(term)
-    logger.error("Validation complete. Valid terms: %d, Invalid terms: %d", len(valid_terms), len(invalid_terms))
     repo.terms = valid_terms
     return invalid_terms
 
@@ -147,7 +142,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
         contents = collection_path.read_text()
         data = json.loads(contents)
         for collection in data.keys():
-            if collection in ["Header", "version_metadata"]:
+            if collection in ["Header", "version_metadata", "license"]:
                 continue
             term_data = data[collection]
             # if collection in ["license"]:
