@@ -120,7 +120,7 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     for term in repo.terms:
         if repo.project == "cordex-cmip6" and term.collection == "table_id":
             term.collection = "frequency"
-        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.collection)
+        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.collection.lower())
         if matching_term:
             term.name = matching_term[0].term_id
             valid_terms.add(term)
@@ -141,28 +141,38 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
             continue
         contents = collection_path.read_text()
         data = json.loads(contents)
-        for collection in data.keys():
-            if collection in ["Header", "version_metadata", "license"]:
+        for collection_key in data.keys():
+            if collection_key in ["Header", "version_metadata", "license"]:
                 continue
-            term_data = data[collection]
-            # if collection in ["license"]:
-            #     term_data = term_data["license_options"]
-            if isinstance(term_data, list):
-                term_keys = [term for term in term_data]
-            elif isinstance(term_data, dict):
-                term_keys = list(term for term in term_data.keys())
-            elif isinstance(term_data, str):
-                term_keys = [term_data]
+            if repo.project == "cordex-cmip6" and collection_key == "fixed":
+                for collection_subkey in data.keys():
+                    if collection_subkey == "license":
+                        continue
+                    term_data = data[collection_subkey]
+                    result.add(
+                        Term(
+                            name=term_data,
+                            collection=collection_subkey,
+                        ),
+                    )
             else:
-                raise TypeError(term_data)
-                
-            for term_key in term_keys:
-                result.add(
-                    Term(
-                        name=term_key,
-                        collection=collection,
-                    ),
-                )
+                term_data = data[collection_key]
+                if isinstance(term_data, list):
+                    term_keys = [term for term in term_data]
+                elif isinstance(term_data, dict):
+                    term_keys = list(term for term in term_data.keys())
+                elif isinstance(term_data, str):
+                    term_keys = [term_data]
+                else:
+                    raise TypeError(term_data)
+                    
+                for term_key in term_keys:
+                    result.add(
+                        Term(
+                            name=term_key,
+                            collection=collection_key,
+                        ),
+                    )
     return result
 
 
