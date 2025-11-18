@@ -80,12 +80,14 @@ class Repo(BaseModel):
 
     @property
     def destination(self) -> Path:
-        dest = self.git_repo.destination
+        return self.git_repo.destination
 
+    @property
+    def cv_location(self) -> Path:
         if self.project == "input4mip":
-            return dest
+            return self.destination / "CVs"
         else:
-            return dest
+            return self.destination
 
     def pull(self) -> None:
         if self.destination.is_dir():
@@ -102,7 +104,7 @@ class Repo(BaseModel):
 @task
 def parse_esgvoc_terms(repo: Repo) -> set[Term]:
     result: set[Term] = set()
-    for term_path in repo.destination.glob("*/*.json"):
+    for term_path in repo.cv_location.glob("*/*.json"):
         if term_path.parent.name[0] in ["_", "."]:
             continue
         if "drs.json" in term_path.name.lower():
@@ -139,8 +141,8 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 def parse_legacy_terms(repo: Repo) -> set[Term]:
     logger = get_run_logger()
     result: set[Term] = set()
-    logger.error(repo.destination)
-    for collection_path in repo.destination.glob("*.json"):
+    logger.error(repo.cv_location)
+    for collection_path in repo.cv_location.glob("*.json"):
         logger.error(collection_path)
         if any(
             collection in collection_path.name
@@ -252,8 +254,8 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     repo_working.pull()
     repo_reference.pull()
 
-    logger.error(repo_reference.destination)
-    for collection_path in repo_reference.destination.glob("*"):
+    logger.error(repo_reference.cv_location)
+    for collection_path in repo_reference.cv_location.glob("*"):
         logger.error(collection_path)
     # logger.error(repo_working)
     # logger.error(repo_reference)
