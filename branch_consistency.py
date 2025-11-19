@@ -367,6 +367,7 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
 
     logger.error("Legacy terms :")
     logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
+    print("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
 
     # logger.error("Esgvoc terms :")
     # logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
