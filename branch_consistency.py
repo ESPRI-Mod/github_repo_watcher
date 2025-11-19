@@ -1,4 +1,5 @@
 from collections import defaultdict
+from unittest import result
 from esgvoc.api.search import MatchingTerm
 import json
 import shutil
@@ -137,109 +138,108 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     return invalid_terms
 
 
-def parse_terms_in_json(collection_key: str, data: dict | list, repo) -> Term | None:
-    if collection_key in ["Header", "version_metadata", "license"]:
-        return None
-    if repo.project == "cordex-cmip6" and collection_key == "fixed" and isinstance(data, dict):
-        for collection_subkey in data.keys():
-            if collection_subkey == "license":
-                return None
-            term_data = data[collection_subkey]
-            return Term(
-                name=term_data,
-                collection=collection_subkey,
-            )
-    else:
-        term_data = data[collection_key]
-        if isinstance(term_data, list):
-            term_keys = [term for term in term_data]
-        elif isinstance(term_data, dict):
-            term_keys = list(term for term in term_data.keys())
-        elif isinstance(term_data, str):
-            term_keys = [term_data]
-        else:
-            raise TypeError(term_data)
+# def build_terms(collection_key: str, data: dict, repo) -> Term | None:
+#     if collection_key in ["Header", "version_metadata", "license"]:
+#         return None
+#     if repo.project == "cordex-cmip6" and collection_key == "fixed" and isinstance(data, dict):
+#         for collection_subkey in data.keys():
+#             if collection_subkey == "license":
+#                 return None
+#             term_data = data[collection_subkey]
+#             return Term(
+#                 name=term_data,
+#                 collection=collection_subkey,
+#             )
+#     else:
+#         term_data = data[collection_key]
+#         if isinstance(term_data, list):
+#             term_keys = [term for term in term_data]
+#         elif isinstance(term_data, dict):
+#             term_keys = list(term for term in term_data.keys())
+#         elif isinstance(term_data, str):
+#             term_keys = [term_data]
+#         else:
+#             raise TypeError(term_data)
             
-        for term_key in term_keys:
-            return Term(
-                name=term_key,
-                collection=collection_key,
-            )
+#         for term_key in term_keys:
+#             return Term(
+#                 name=term_key,
+#                 collection=collection_key,
+#             )
 
 
-def prepare_data_in_json(repo: Repo, data: dict | list, collection_path: Path) -> dict:
+def prepare_json_cordex_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
     result = {}
+    for collection_key, terms in data.items():
+        result[collection_key] = {}
 
-    match repo.project:
-        case "cordex-cmip6":
-            """
-            """
-            for collection_key, terms in data.items():
-                result[collection_key] = {}
+        if isinstance(terms, dict):
+            for term_key, term_content in terms.items():
+                result[collection_key][term_key] = term_content
+        elif isinstance(terms, list):
+            for term_key in data[collection_key]:
+                result[collection_key][term_key] = None
+        else:
+            raise TypeError(terms)
+    return result
 
-                if isinstance(terms, dict):
-                    for term_key, term_content in terms.items():
-                        result[collection_key][term_key] = term_content
-                elif isinstance(terms, list):
-                    for term_key in data[collection_key]:
-                        result[collection_key][term_key] = None
-                else:
-                    raise TypeError(terms)
-        case "cmip6":
-            """
-            """
-            for collection_key, terms in data.items():
-                if collection_key == "version_metadata":
-                    continue
-                else:
-                    result[collection_key] = {}
 
-                    if isinstance(terms, dict):
-                        for term_key, term_content in terms.items():
-                            result[collection_key][term_key] = term_content
-                    elif isinstance(terms, list):
-                        for term_key in terms:
-                            result[collection_key][term_key] = None
-                    else:
-                        raise TypeError(terms)
+def prepare_json_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
+    result = {}
+    for collection_key, terms in data.items():
+        if collection_key == "version_metadata":
+            continue
+        else:
+            result[collection_key] = {}
 
-        case "cmip6plus":
-            for collection_key, terms in data.items():
-                if collection_key == "Header":
-                    continue
-                else:
-                    result[collection_key] = {}
-
-                    if isinstance(terms, dict):
-                        for term_key, term_content in terms.items():
-                            result[collection_key][term_key] = term_content
-                    elif isinstance(terms, list):
-                        for term_key in terms:
-                            result[collection_key][term_key] = None
-                    elif isinstance(terms, str):
-                        result[collection_key][terms] = None
-                    else:
-                        raise TypeError(terms)
-        case "input4mip":
-            collection = collection_path.stem.removeprefix("input4MIPs_")
-            result[collection] = {}
-            if collection == "target_mip.json":
-                for target_mips in data.values():
-                    for target_mip, target_mip_params in target_mips.items():
-                        result["target_mip"][target_mip] = target_mip_params
+            if isinstance(terms, dict):
+                for term_key, term_content in terms.items():
+                    result[collection_key][term_key] = term_content
+            elif isinstance(terms, list):
+                for term_key in terms:
+                    result[collection_key][term_key] = None
             else:
-                if isinstance(data, dict):
-                    for term_key, term_content in data.items():
-                        result[collection][term_key] = term_content
-                elif isinstance(data, list):
-                    for term_key in data:
-                        result[collection][term_key] = None
-                else:
-                    raise TypeError(data)
-                    
-        case _:
+                raise TypeError(terms)
+    return result
+
+
+def prepare_json_cmip6plus(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
+    result = {}
+    for collection_key, terms in data.items():
+        if collection_key == "Header":
+            continue
+        else:
+            result[collection_key] = {}
+            if isinstance(terms, dict):
+                for term_key, term_content in terms.items():
+                    result[collection_key][term_key] = term_content
+            elif isinstance(terms, list):
+                for term_key in terms:
+                    result[collection_key][term_key] = None
+            elif isinstance(terms, str):
+                result[collection_key][terms] = None
+            else:
+                raise TypeError(terms)
+    return result
+
+
+def prepare_json_input4mip(data: dict | list[str], collection_path: Path) -> dict[str, dict[str, dict[str, str] | None]]:
+    result = {}
+    collection = collection_path.stem.removeprefix("input4MIPs_")
+    result[collection] = {}
+    if collection == "target_mip.json":
+        for target_mips in data.values():
+            for target_mip, target_mip_params in target_mips.items():
+                result["target_mip"][target_mip] = target_mip_params
+    else:
+        if isinstance(data, dict):
+            for term_key, term_content in data.items():
+                result[collection][term_key] = term_content
+        elif isinstance(data, list):
+            for term_key in data:
+                result[collection][term_key] = None
+        else:
             raise TypeError(data)
-        
     return result
 
 
@@ -255,20 +255,39 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
         contents = collection_path.read_text()
         data = json.loads(contents)
 
-        ###
-        ### !
-        ###
+        match repo.project:
+            case "cordex-cmip6":
+                prepared_data = prepare_json_cordex_cmip6(data)
+            case "cmip6":
+                prepared_data = prepare_json_cmip6(data)
+            case "cmip6plus":
+                prepared_data = prepare_json_cmip6plus(data)
+            case "input4mip":
+                prepared_data = prepare_json_input4mip(data, collection_path)
+            case _:
+                raise ValueError(repo.project)
+        print(collection_path)
+        print(prepared_data)
+        # if isinstance(data, dict):
+        #     for collection_key in data.keys():
+        #         term_key = parse_terms_in_json(collection_key, data, repo)
+        #         if term_key is not None:
+        #             result.add(term_key)
+        # elif isinstance(data, list):
+        #     for collection_key in data:
+        #         term_key = parse_terms_in_json(collection_key, data, repo)
+        #         if term_key is not None:
+        #             result.add(term_key)
 
-        if isinstance(data, dict):
-            for collection_key in data.keys():
-                term_key = parse_terms_in_json(collection_key, data, repo)
-                if term_key is not None:
-                    result.add(term_key)
-        elif isinstance(data, list):
-            for collection_key in data:
-                term_key = parse_terms_in_json(collection_key, data, repo)
-                if term_key is not None:
-                    result.add(term_key)
+        for collection_key, terms in prepared_data.items():
+            for term_key in terms.keys():
+                result.add(
+                    Term(
+                        name=term_key,
+                        collection=collection_key,
+                    )
+                )
+
         else:
             raise TypeError(data)
     return result
