@@ -288,8 +288,6 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                     )
                 )
 
-        else:
-            raise TypeError(data)
     return result
 
 
