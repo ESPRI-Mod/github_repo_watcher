@@ -266,8 +266,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                 prepared_data = prepare_json_input4mip(data, collection_path)
             case _:
                 raise ValueError(repo.project)
-        print(collection_path)
-        print(prepared_data)
+
         # if isinstance(data, dict):
         #     for collection_key in data.keys():
         #         term_key = parse_terms_in_json(collection_key, data, repo)
@@ -359,23 +358,7 @@ def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
     repo_working.pull()
     repo_reference.pull()
 
-    logger.error(repo_reference.cv_location)
-    for collection_path in repo_reference.cv_location.glob("*"):
-        logger.error(collection_path)
-    # logger.error(repo_working)
-    # logger.error(repo_reference)
-
-    logger.error("Legacy terms :")
-    logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
-    print("\n".join(f"{term.collection} | {term.name}" for term in repo_reference.terms))
-
-    # logger.error("Esgvoc terms :")
-    # logger.error("\n".join(f"{term.collection} | {term.name}" for term in repo_working.terms))
-
     invalid_legacy_terms = validate_legacy_terms(repo_reference)
-
-    logger.error("Legacy missing terms :")
-    logger.error("\n".join(f"{term.collection} | {term.name}" for term in invalid_legacy_terms))
 
     if repo_working.terms == repo_reference.terms and not invalid_legacy_terms:
         status = Status.consistent
