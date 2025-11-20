@@ -17,11 +17,9 @@ repos:
     project: cmip6
   - owner: WCRP-CMIP
     repo: Variable-Registry
-    working_branch: main
     reference_branch: null
     project: Variable-Registry
   - owner: alaupin-ipsl
     repo: CMIP7_CVs
-    working_branch: main
     reference_branch: null
     project: CMIP7
