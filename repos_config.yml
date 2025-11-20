@@ -1,37 +1,18 @@
 repos:
   - owner: WCRP-CORDEX
     repo: cordex-cmip6-cv
-    working_branch: esgvoc
     reference_branch: main
     project: cordex-cmip6
-  - owner: alaupin-ipsl
-    repo: CORDEX-CMIP6_CVs
-    working_branch: test
-    reference_branch: null
-    project: CORDEX-CMIP6
-  - owner: WCRP-CMIP
-    repo: WCRP-universe
-    working_branch: esgvoc_dev
-    reference_branch: null
-    project: universe
   - owner: PCMDI
     repo: input4MIPs_CVs
-    working_branch: esgvoc
     reference_branch: main
     project: input4mip
-  - owner: Climate-REF
-    repo: Obs4REF_CVs
-    working_branch: main
-    reference_branch: null
-    project: obs4REF
   - owner: WCRP-CMIP
     repo: CMIP6Plus_CVs
-    working_branch: esgvoc
     reference_branch: main
     project: cmip6plus
   - owner: WCRP-CMIP
     repo: CMIP6_CVs
-    working_branch: esgvoc
     reference_branch: main
     project: cmip6
   - owner: WCRP-CMIP
