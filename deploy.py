@@ -5,7 +5,7 @@ from prefect import flow
 from prefect_github import GitHubRepository
 from pydantic import BaseModel
 
-from branch_consistency import Form, Repo
+from branch_consistency import Repo
 
 
 class SpiritGitRepository(GitRepository):
@@ -33,7 +33,6 @@ class SpiritGitRepository(GitRepository):
 class Config(BaseModel):
     owner: str
     repo: str
-    working_branch: str
     reference_branch: str | None = None
     project: str
 
@@ -57,36 +56,23 @@ if __name__ == "__main__":
     for config in configs:
         if config.reference_branch is None:
             continue
-        if config.working_branch == "REF":
-            main_form = Form.esgvoc
-        else:
-            main_form = Form.legacy
 
-        repo_working = Repo(
-            url=f"https://github.com/{config.owner}/{config.repo}",
-            branch=config.working_branch,
-            form=Form.esgvoc,
-            project=config.project,
-        )
         repo_reference = Repo(
             url=f"https://github.com/{config.owner}/{config.repo}",
             branch=config.reference_branch,
-            form=main_form,
             project=config.project,
         )
 
-        name = repo_working.nicename.replace("/", "-")
+        name = repo_reference.nicename.replace("/", "-")
         code.deploy(
             name,
             work_pool_name="alaupin-spiritx",
             tags=[
                 "consistency",
-                repo_working.nicename,
                 repo_reference.nicename,
-                repo_working.branch,
                 repo_reference.branch,
-                repo_working.nicename.split("@")[0],
+                repo_reference.nicename.split("@")[0],
             ],
-            parameters={"repo_working": repo_working, "repo_reference": repo_reference},
+            parameters={"repo_reference": repo_reference},
             cron="0 6 * * 1-5",
         )

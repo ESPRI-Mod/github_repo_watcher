@@ -21,9 +21,6 @@ from esgvoc.core.service.state import ServiceSettings
 from esgvoc.core.service import config_manager, current_state
 import esgvoc.api as ev
 
-# ESGVOC_EXCLUDED_COLLECTIONS = [
-#     "variable_id"
-# ]
 LEGACY_EXCLUDED_COLLECTIONS = [
     "DRS",
     "required_global_attributes",
@@ -34,11 +31,6 @@ LEGACY_EXCLUDED_COLLECTIONS = [
 class Status(StrEnum):
     inconsistent = auto()
     consistent = auto()
-
-
-class Form(StrEnum):
-    esgvoc = auto()
-    legacy = auto()
 
 
 class Term(BaseModel):
@@ -61,7 +53,6 @@ class Term(BaseModel):
 class Repo(BaseModel):
     url: str
     branch: str
-    form: Form
     project: str
     # local_path: Path | None = None
 
@@ -73,11 +64,7 @@ class Repo(BaseModel):
 
     @cached_property
     def terms(self) -> set[Term]:
-        match self.form:
-            case Form.esgvoc:
-                return parse_esgvoc_terms(self)
-            case Form.legacy:
-                return parse_legacy_terms(self)
+        return parse_legacy_terms(self)
 
     @property
     def destination(self) -> Path:
@@ -102,25 +89,6 @@ class Repo(BaseModel):
         return f"{owner}/{repo}@{self.branch}"
 
 
-@task
-def parse_esgvoc_terms(repo: Repo) -> set[Term]:
-    result: set[Term] = set()
-    for term_path in repo.cv_location.glob("*/*.json"):
-        if term_path.parent.name[0] in ["_", "."]:
-            continue
-        if "drs.json" in term_path.name.lower():
-            continue
-        contents = term_path.read_text()
-        data = json.loads(contents)
-        result.add(
-            Term(
-                name=data["id"],
-                collection=term_path.parent.name,
-            ),
-        )
-    return result
-
-
 @task(log_prints=True)
 def validate_legacy_terms(repo: Repo) -> set[Term]:
     valid_terms: set[Term] = set()
@@ -138,36 +106,6 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     return invalid_terms
 
 
-# def build_terms(collection_key: str, data: dict, repo) -> Term | None:
-#     if collection_key in ["Header", "version_metadata", "license"]:
-#         return None
-#     if repo.project == "cordex-cmip6" and collection_key == "fixed" and isinstance(data, dict):
-#         for collection_subkey in data.keys():
-#             if collection_subkey == "license":
-#                 return None
-#             term_data = data[collection_subkey]
-#             return Term(
-#                 name=term_data,
-#                 collection=collection_subkey,
-#             )
-#     else:
-#         term_data = data[collection_key]
-#         if isinstance(term_data, list):
-#             term_keys = [term for term in term_data]
-#         elif isinstance(term_data, dict):
-#             term_keys = list(term for term in term_data.keys())
-#         elif isinstance(term_data, str):
-#             term_keys = [term_data]
-#         else:
-#             raise TypeError(term_data)
-            
-#         for term_key in term_keys:
-#             return Term(
-#                 name=term_key,
-#                 collection=collection_key,
-#             )
-
-
 def prepare_json_cordex_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
     result = {}
     for collection_key, terms in data.items():
@@ -177,7 +115,7 @@ def prepare_json_cordex_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] 
             for term_key, term_content in terms.items():
                 result[collection_key][term_key] = term_content
         elif isinstance(terms, list):
-            for term_key in data[collection_key]:
+            for term_key in terms:
                 result[collection_key][term_key] = None
         else:
             raise TypeError(terms)
@@ -252,6 +190,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
             for collection in LEGACY_EXCLUDED_COLLECTIONS
         ):
             continue
+
         contents = collection_path.read_text()
         data = json.loads(contents)
 
@@ -310,15 +249,14 @@ def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
     r_post.raise_for_status()
 
 
-def format_output(repo1: Repo, repo2: Repo, invalid_legacy_terms: set[Term]) -> str:
-    f"Terms in {repo1.nicename} not in {repo2.nicename}:"
-    # missing_terms = repo1.terms - repo2.terms
+def format_output(repo: Repo, invalid_legacy_terms: set[Term]) -> str:
+    f"Terms in {repo.nicename} not found in esgvoc:"
 
     grouped_terms: defaultdict[Any, list[Any]] = defaultdict(list)
     for term in invalid_legacy_terms:
         grouped_terms[term.collection].append(term.name)
 
-    lines = [f"Terms in {repo1.nicename} not in {repo2.nicename}:"]
+    lines = [f"Terms in {repo.nicename} not found in esgvoc:"]
     for collection in sorted(grouped_terms.keys()):
         terms = grouped_terms[collection]
         lines.append(f"{collection}:")
@@ -351,18 +289,17 @@ def config_esgvoc():
 
 
 @flow(log_prints=True)
-def are_branch_consistent(repo_working: Repo, repo_reference: Repo):
+def are_branch_consistent(repo: Repo):
     logger = get_run_logger()
 
     config_esgvoc()
-    repo_working.pull()
-    repo_reference.pull()
+    repo.pull()
 
-    invalid_legacy_terms = validate_legacy_terms(repo_reference)
+    invalid_legacy_terms = validate_legacy_terms(repo)
 
-    if repo_working.terms == repo_reference.terms and not invalid_legacy_terms:
+    if not invalid_legacy_terms:
         status = Status.consistent
     else:
-        logger.error(format_output(repo_reference, repo_working, invalid_legacy_terms))
+        logger.error(format_output(repo, invalid_legacy_terms))
         status = Status.inconsistent
-        send_to_nocodb(repo_working, repo_reference)
+        send_to_nocodb(repo)
