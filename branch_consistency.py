@@ -230,7 +230,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 
 
 @task(log_prints=True)
-def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
+def send_to_nocodb(repo: Repo):
     API_KEY = Secret.load("nocodb-consistency-api-key").get()
     HEADERS = {"xc-token": API_KEY, "Content-Type": "application/json"}
     BASE_URL = Variable.get("nocodb_base_url")
@@ -238,9 +238,8 @@ def send_to_nocodb(repo_working: Repo, repo_reference: Repo):
     TABLE_URL = f"{BASE_URL}/{TABLE_ID}/records"
 
     payload = {
-        "repository": repo_working.nicename.split("@")[0],
-        "working_branch": repo_working.branch,
-        "reference_branch": repo_reference.branch,
+        "repository": repo.nicename.split("@")[0],
+        "reference_branch": repo.branch,
         "is_verified": False,
         "task_url": flow_run.get_flow_run_ui_url(),
     }
