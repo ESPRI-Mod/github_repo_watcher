@@ -112,11 +112,10 @@ def prepare_json_cordex_cmip6(
     data: dict,
 ) -> dict[str, dict[str, dict[str, str] | None]]:
     result = {}
-    dontcheck = [
-        "driving_variant_label",
-    ]
+    skipped_collections = ["driving_variant_label"]
+    
     for collection_key, terms in data.items():
-        if collection_key in dontcheck:
+        if collection_key in skipped_collections:
             continue
         result[collection_key] = {}
 
@@ -277,11 +276,11 @@ def format_output(repo: Repo, invalid_legacy_terms: set[Term]) -> str:
 
 
 @task
-def config_esgvoc():
+def config_esgvoc(github_repo, branch):
     dico = {
         "universe": {
-            "github_repo": "https://github.com/WCRP-CMIP/WCRP-universe",
-            "branch": "esgvoc",
+            "github_repo": github_repo,
+            "branch": branch,
             "local_path": "repos/WCRP-universe",
             "db_path": "dbs/universe.sqlite",
             "offline_mode": False,
@@ -299,17 +298,17 @@ def config_esgvoc():
 
 
 @flow(log_prints=True)
-def are_branch_consistent(repo: Repo):
+def are_branch_consistent(project_repo: Repo, esgvoc_github_repo, esgvoc_branch):
     logger = get_run_logger()
 
-    config_esgvoc()
-    repo.pull()
+    config_esgvoc(esgvoc_github_repo, esgvoc_branch)
+    project_repo.pull()
 
-    invalid_legacy_terms = validate_legacy_terms(repo)
+    invalid_legacy_terms = validate_legacy_terms(project_repo)
 
     if not invalid_legacy_terms:
         status = Status.consistent
     else:
-        logger.error(format_output(repo, invalid_legacy_terms))
+        logger.error(format_output(project_repo, invalid_legacy_terms))
         status = Status.inconsistent
-        send_to_nocodb(repo)
+        send_to_nocodb(project_repo)
