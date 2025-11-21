@@ -96,7 +96,9 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     for term in repo.terms:
         if repo.project == "cordex-cmip6" and term.collection == "table_id":
             term.collection = "frequency"
-        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(term.name, repo.project, term.collection.lower())
+        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(
+            term.name, repo.project, term.collection.lower()
+        )
         if matching_term:
             term.name = matching_term[0].term_id
             valid_terms.add(term)
@@ -106,9 +108,16 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
     return invalid_terms
 
 
-def prepare_json_cordex_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
+def prepare_json_cordex_cmip6(
+    data: dict,
+) -> dict[str, dict[str, dict[str, str] | None]]:
     result = {}
+    dontcheck = [
+        "driving_variant_label",
+    ]
     for collection_key, terms in data.items():
+        if collection_key in dontcheck:
+            continue
         result[collection_key] = {}
 
         if isinstance(terms, dict):
@@ -161,7 +170,9 @@ def prepare_json_cmip6plus(data: dict) -> dict[str, dict[str, dict[str, str] | N
     return result
 
 
-def prepare_json_input4mip(data: dict | list[str], collection_path: Path) -> dict[str, dict[str, dict[str, str] | None]]:
+def prepare_json_input4mip(
+    data: dict | list[str], collection_path: Path
+) -> dict[str, dict[str, dict[str, str] | None]]:
     result = {}
     collection = collection_path.stem.removeprefix("input4MIPs_")
     result[collection] = {}
