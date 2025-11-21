@@ -276,11 +276,11 @@ def format_output(repo: Repo, invalid_legacy_terms: set[Term]) -> str:
 
 
 @task
-def config_esgvoc(github_repo, branch):
+def config_esgvoc():
     dico = {
         "universe": {
-            "github_repo": github_repo,
-            "branch": branch,
+            "github_repo": "https://github.com/WCRP-CMIP/WCRP-universe",
+            "branch": "esgvoc",
             "local_path": "repos/WCRP-universe",
             "db_path": "dbs/universe.sqlite",
             "offline_mode": False,
@@ -332,10 +332,14 @@ def config_custom_esgvoc():
 
 
 @flow(log_prints=True)
-def are_branch_consistent(project_repo: Repo, esgvoc_github_repo, esgvoc_branch):
+def are_branch_consistent(project_repo: Repo, dev: bool):
     logger = get_run_logger()
 
-    config_esgvoc(esgvoc_github_repo, esgvoc_branch)
+    if not dev:
+        config_esgvoc()
+    else:
+        config_custom_esgvoc()
+    
     project_repo.pull()
 
     invalid_legacy_terms = validate_legacy_terms(project_repo)

@@ -73,6 +73,6 @@ if __name__ == "__main__":
                 repo_reference.branch,
                 repo_reference.nicename.split("@")[0],
             ],
-            parameters={"repo": repo_reference, "esgvoc_github_repo": "https://github.com/WCRP-CMIP/WCRP-universe", "esgvoc_branch": "esgvoc"},
+            parameters={"repo": repo_reference, "dev": False},
             cron="0 6 * * 1-5",
         )
