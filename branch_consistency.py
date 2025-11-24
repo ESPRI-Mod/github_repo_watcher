@@ -311,7 +311,7 @@ def config_custom_esgvoc():
             {
                 "project_name": "cmip6",
                 "github_repo": "https://github.com/alaupin-ipsl/CMIP6_CVs",
-                "branch": "main",
+                "branch": "esgvoc_dev",
                 "local_path": "repos/CMIP6_CVs",
                 "db_path": "dbs/cmip6.sqlite",
                 "offline_mode": False,
@@ -319,15 +319,23 @@ def config_custom_esgvoc():
             {
                 "project_name": "cmip6plus",
                 "github_repo": "https://github.com/alaupin-ipsl/CMIP6Plus_CVs",
-                "branch": "main",
+                "branch": "esgvoc_dev",
                 "local_path": "repos/CMIP6Plus_CVs",
                 "db_path": "dbs/cmip6plus.sqlite",
                 "offline_mode": False,
             },
+            {
+                "project_name": "input4mips",
+                "github_repo": "https://github.com/alaupin-ipsl/input4MIPs_CVs",
+                "branch": "esgvoc_dev",
+                "local_path": "repos/input4MIPs_CVs",
+                "db_path": "dbs/input4mips.sqlite",
+                "offline_mode": False,
+            }
         ],
         "universe": {
             "github_repo": "https://github.com/alaupin-ipsl/WCRP-universe",
-            "branch": "main",
+            "branch": "esgvoc_dev",
             "local_path": "repos/WCRP-universe",
             "db_path": "dbs/universe.sqlite",
         },
