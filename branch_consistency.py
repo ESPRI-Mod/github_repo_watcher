@@ -6,7 +6,7 @@ import shutil
 from enum import StrEnum, auto
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Self, TypeAlias
 
 from prefect import flow, get_run_logger, task
 from prefect.variables import Variable
@@ -26,6 +26,13 @@ LEGACY_EXCLUDED_COLLECTIONS = [
     "required_global_attributes",
     "global_attrs",
 ]
+
+
+CollectionKey: TypeAlias = str
+TermKey: TypeAlias = str
+TermDict: TypeAlias = dict[str, str]
+CollectionTermsDict: TypeAlias = dict[TermKey, TermDict | None]
+VocabularyDict: TypeAlias = dict[CollectionKey, CollectionTermsDict]
 
 
 class Status(StrEnum):
@@ -109,8 +116,8 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 
 
 def prepare_json_cordex_cmip6(
-    data: dict,
-) -> dict[str, dict[str, dict[str, str] | None]]:
+    data: dict[str, Any],
+) -> VocabularyDict:
     result = {}
     skipped_collections = ["driving_variant_label"]
     
@@ -130,7 +137,7 @@ def prepare_json_cordex_cmip6(
     return result
 
 
-def prepare_json_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
+def prepare_json_cmip6(data: dict) -> VocabularyDict:
     result = {}
     for collection_key, terms in data.items():
         if collection_key == "version_metadata":
@@ -149,7 +156,7 @@ def prepare_json_cmip6(data: dict) -> dict[str, dict[str, dict[str, str] | None]
     return result
 
 
-def prepare_json_cmip6plus(data: dict) -> dict[str, dict[str, dict[str, str] | None]]:
+def prepare_json_cmip6plus(data: dict) -> VocabularyDict:
     result = {}
     for collection_key, terms in data.items():
         if collection_key == "Header":
@@ -171,7 +178,7 @@ def prepare_json_cmip6plus(data: dict) -> dict[str, dict[str, dict[str, str] | N
 
 def prepare_json_input4mip(
     data: dict | list[str], collection_path: Path
-) -> dict[str, dict[str, dict[str, str] | None]]:
+) -> VocabularyDict:
     result = {}
     collection = collection_path.stem.removeprefix("input4MIPs_")
     result[collection] = {}
