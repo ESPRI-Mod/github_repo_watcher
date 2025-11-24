@@ -325,11 +325,11 @@ def config_custom_esgvoc():
                 "offline_mode": False,
             },
             {
-                "project_name": "input4mips",
+                "project_name": "input4mip",
                 "github_repo": "https://github.com/alaupin-ipsl/input4MIPs_CVs",
                 "branch": "esgvoc_dev",
                 "local_path": "repos/input4MIPs_CVs",
-                "db_path": "dbs/input4mips.sqlite",
+                "db_path": "dbs/input4mip.sqlite",
                 "offline_mode": False,
             }
         ],
