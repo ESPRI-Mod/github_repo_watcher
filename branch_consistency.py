@@ -182,7 +182,7 @@ def prepare_json_input4mip(
     result = {}
     collection = collection_path.stem.removeprefix("input4MIPs_")
     result[collection] = {}
-    if collection == "target_mip.json":
+    if collection == "target_mip":
         for target_mips in data.values():
             for target_mip, target_mip_params in target_mips.items():
                 result["target_mip"][target_mip] = target_mip_params
