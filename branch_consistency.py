@@ -38,8 +38,6 @@ VocabularyDict: TypeAlias = dict[CollectionKey, CollectionTermsDict]
 class Term(BaseModel):
     name: str
     collection: str
-    # path: Path
-    # json_path: str = "" | ".institution_id.AWI"
 
     @property
     def key(self) -> str:
@@ -217,17 +215,6 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                 prepared_data = prepare_json_input4mip(data, collection_path)
             case _:
                 raise ValueError(repo.project)
-
-        # if isinstance(data, dict):
-        #     for collection_key in data.keys():
-        #         term_key = parse_terms_in_json(collection_key, data, repo)
-        #         if term_key is not None:
-        #             result.add(term_key)
-        # elif isinstance(data, list):
-        #     for collection_key in data:
-        #         term_key = parse_terms_in_json(collection_key, data, repo)
-        #         if term_key is not None:
-        #             result.add(term_key)
 
         for collection_key, terms in prepared_data.items():
             for term_key in terms.keys():
