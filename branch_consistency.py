@@ -12,7 +12,7 @@ from prefect.runner.storage import GitRepository
 from prefect.runtime import flow_run
 from prefect.utilities.asyncutils import run_coro_as_sync
 from prefect.blocks.system import Secret
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 import requests
 
 from esgvoc.core.service.state import ServiceSettings
@@ -25,12 +25,18 @@ LEGACY_EXCLUDED_COLLECTIONS = [
     "global_attrs",
 ]
 
-
-CollectionKey: TypeAlias = str
 TermKey: TypeAlias = str
-TermDict: TypeAlias = dict[str, str]
-CollectionTermsDict: TypeAlias = dict[TermKey, TermDict | None]
-VocabularyDict: TypeAlias = dict[CollectionKey, CollectionTermsDict]
+TermValue: TypeAlias = str
+TermDict: TypeAlias = dict[TermKey, str | list[str] | dict[str, Any]]
+CollectionKey: TypeAlias = str
+NotCollectionKey: TypeAlias = str
+
+CordexCMIP6InputDict: TypeAlias = dict[CollectionKey, list[TermKey] | TermDict]
+CMIP6InputDict: TypeAlias = dict[CollectionKey, list[TermKey] | TermDict]
+CMIP6PlusInputDict: TypeAlias = dict[CollectionKey, TermKey | list[TermKey] | TermDict]
+Input4MipsInputDict: TypeAlias = list[TermKey] | TermDict | dict[NotCollectionKey, TermDict]
+
+VocabularyDict: TypeAlias = dict[CollectionKey, TermDict]
 
 
 class Term(BaseModel):
@@ -107,9 +113,9 @@ def validate_legacy_terms(repo: Repo) -> set[Term]:
 
 
 def prepare_json_cordex_cmip6(
-    data: dict[str, Any],
+    data: CordexCMIP6InputDict,
 ) -> VocabularyDict:
-    result = {}
+    result: VocabularyDict = {}
     skipped_collections = ["driving_variant_label"]
     
     for collection_key, terms in data.items():
@@ -117,75 +123,76 @@ def prepare_json_cordex_cmip6(
             continue
         result[collection_key] = {}
 
-        if isinstance(terms, dict):
-            for term_key, term_content in terms.items():
-                result[collection_key][term_key] = term_content
-        elif isinstance(terms, list):
-            for term_key in terms:
-                result[collection_key][term_key] = None
-        else:
-            raise TypeError(terms)
+        match terms:
+            case dict():
+                for term_key, term_content in terms.items():
+                    result[collection_key][term_key] = term_content
+            case list():
+                for term_key in terms:
+                    result[collection_key][term_key] = {}
+
     return result
 
 
-def prepare_json_cmip6(data: dict) -> VocabularyDict:
-    result = {}
+def prepare_json_cmip6(data: CMIP6InputDict) -> VocabularyDict:
+    result: VocabularyDict = {}
     for collection_key, terms in data.items():
         if collection_key == "version_metadata":
             continue
         else:
             result[collection_key] = {}
 
-            if isinstance(terms, dict):
-                for term_key, term_content in terms.items():
-                    result[collection_key][term_key] = term_content
-            elif isinstance(terms, list):
-                for term_key in terms:
-                    result[collection_key][term_key] = None
-            else:
-                raise TypeError(terms)
+            match terms:
+                case dict():
+                    for term_key, term_content in terms.items():
+                        result[collection_key][term_key] = term_content
+                case list():
+                    for term_key in terms:
+                        result[collection_key][term_key] = {}
+
     return result
 
 
-def prepare_json_cmip6plus(data: dict) -> VocabularyDict:
-    result = {}
+def prepare_json_cmip6plus(data: CMIP6PlusInputDict) -> VocabularyDict:
+    result: VocabularyDict = {}
     for collection_key, terms in data.items():
         if collection_key == "Header":
             continue
         else:
             result[collection_key] = {}
-            if isinstance(terms, dict):
-                for term_key, term_content in terms.items():
-                    result[collection_key][term_key] = term_content
-            elif isinstance(terms, list):
-                for term_key in terms:
-                    result[collection_key][term_key] = None
-            elif isinstance(terms, str):
-                result[collection_key][terms] = None
-            else:
-                raise TypeError(terms)
+
+            match terms:
+                case dict():
+                    for term_key, term_content in terms.items():
+                        result[collection_key][term_key] = term_content
+                case list():
+                    for term_key in terms:
+                        result[collection_key][term_key] = {}
+                case str():
+                    result[collection_key][terms] = {}
+
     return result
 
 
 def prepare_json_input4mip(
-    data: dict | list[str], collection_path: Path
+    data: Input4MipsInputDict, collection_path: Path
 ) -> VocabularyDict:
-    result = {}
+    result: VocabularyDict = {}
     collection = collection_path.stem.removeprefix("input4MIPs_")
     result[collection] = {}
-    if collection == "target_mip":
-        for target_mips in data.values():
-            for target_mip, target_mip_params in target_mips.items():
-                result["target_mip"][target_mip] = target_mip_params
-    else:
-        if isinstance(data, dict):
+    
+    match data:
+        case dict() if collection == "target_mip":
+            for target_mips in data.values():
+                for target_mip, target_mip_params in target_mips.items():
+                    result["target_mip"][target_mip] = target_mip_params
+        case dict():
             for term_key, term_content in data.items():
                 result[collection][term_key] = term_content
-        elif isinstance(data, list):
+        case list():
             for term_key in data:
-                result[collection][term_key] = None
-        else:
-            raise TypeError(data)
+                result[collection][term_key] = {}
+                
     return result
 
 
@@ -200,17 +207,20 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
             continue
 
         contents = collection_path.read_text()
-        data = json.loads(contents)
 
         match repo.project:
             case "cordex-cmip6":
-                prepared_data = prepare_json_cordex_cmip6(data)
+                data_cordexcmip6: CordexCMIP6InputDict = TypeAdapter(CordexCMIP6InputDict).validate_json(contents)
+                prepared_data = prepare_json_cordex_cmip6(data_cordexcmip6)
             case "cmip6":
-                prepared_data = prepare_json_cmip6(data)
+                data_cmip6: CMIP6InputDict = TypeAdapter(CMIP6InputDict).validate_json(contents)
+                prepared_data = prepare_json_cmip6(data_cmip6)
             case "cmip6plus":
-                prepared_data = prepare_json_cmip6plus(data)
+                data_cmip6plus: CMIP6PlusInputDict = TypeAdapter(CMIP6PlusInputDict).validate_json(contents)
+                prepared_data = prepare_json_cmip6plus(data_cmip6plus)
             case "input4mip":
-                prepared_data = prepare_json_input4mip(data, collection_path)
+                data_input4mip: Input4MipsInputDict = TypeAdapter(Input4MipsInputDict).validate_json(contents)
+                prepared_data = prepare_json_input4mip(data_input4mip, collection_path)
             case _:
                 raise ValueError(repo.project)
 
