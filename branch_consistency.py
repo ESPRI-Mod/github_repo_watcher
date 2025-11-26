@@ -35,11 +35,6 @@ CollectionTermsDict: TypeAlias = dict[TermKey, TermDict | None]
 VocabularyDict: TypeAlias = dict[CollectionKey, CollectionTermsDict]
 
 
-class Status(StrEnum):
-    inconsistent = auto()
-    consistent = auto()
-
-
 class Term(BaseModel):
     name: str
     collection: str
@@ -359,9 +354,6 @@ def are_branch_consistent(project_repo: Repo, dev: bool):
 
     invalid_legacy_terms = validate_legacy_terms(project_repo)
 
-    if not invalid_legacy_terms:
-        status = Status.consistent
-    else:
+    if invalid_legacy_terms:
         logger.error(format_output(project_repo, invalid_legacy_terms))
-        status = Status.inconsistent
         send_to_nocodb(project_repo)
