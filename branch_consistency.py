@@ -58,7 +58,6 @@ class Repo(BaseModel):
     url: str
     branch: str
     project: str
-    # local_path: Path | None = None
 
     @property
     def git_repo(self) -> GitRepository:
