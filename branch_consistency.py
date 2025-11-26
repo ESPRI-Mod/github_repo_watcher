@@ -1,9 +1,7 @@
 from collections import defaultdict
-from unittest import result
 from esgvoc.api.search import MatchingTerm
 import json
 import shutil
-from enum import StrEnum, auto
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Self, TypeAlias
