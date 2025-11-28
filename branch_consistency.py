@@ -25,9 +25,10 @@ LEGACY_EXCLUDED_COLLECTIONS = [
     "global_attrs",
 ]
 
+ParamStr: TypeAlias = str
+ParamDict: TypeAlias = dict[str, Any]
 TermKey: TypeAlias = str
-TermValue: TypeAlias = str
-TermDict: TypeAlias = dict[TermKey, str | list[str] | dict[str, Any]]
+TermDict: TypeAlias = dict[TermKey, ParamStr | ParamDict]
 CollectionKey: TypeAlias = str
 NotCollectionKey: TypeAlias = str
 
@@ -92,23 +93,20 @@ class Repo(BaseModel):
         return f"{owner}/{repo}@{self.branch}"
 
 
-@task(log_prints=True)
-def validate_legacy_terms(repo: Repo) -> set[Term]:
-    valid_terms: set[Term] = set()
-    invalid_terms: set[Term] = set()
-    for term in repo.terms:
-        if repo.project == "cordex-cmip6" and term.collection == "table_id":
-            term.collection = "frequency"
-        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(
-            term.name, repo.project, term.collection.lower()
-        )
-        if matching_term:
-            term.name = matching_term[0].term_id
-            valid_terms.add(term)
-        else:
-            invalid_terms.add(term)
-    repo.terms = valid_terms
-    return invalid_terms
+def validate_typing_cordex_cmip6(data: str) -> CordexCMIP6InputDict:
+    return TypeAdapter(CordexCMIP6InputDict).validate_json(data)
+
+
+def validate_typing_cmip6(data: str) -> CMIP6InputDict:
+    return TypeAdapter(CMIP6InputDict).validate_json(data)
+
+
+def validate_typing_cmip6plus(data: str) -> CMIP6PlusInputDict:
+    return TypeAdapter(CMIP6PlusInputDict).validate_json(data)
+
+
+def validate_typing_input4mip(data: str) -> Input4MipsInputDict:
+    return TypeAdapter(Input4MipsInputDict).validate_json(data)
 
 
 def prepare_json_cordex_cmip6(
@@ -191,7 +189,7 @@ def prepare_json_input4mip(
         case list():
             for term_key in data:
                 result[collection][term_key] = {}
-                
+
     return result
 
 
@@ -209,17 +207,13 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
 
         match repo.project:
             case "cordex-cmip6":
-                data_cordexcmip6: CordexCMIP6InputDict = TypeAdapter(CordexCMIP6InputDict).validate_json(contents)
-                prepared_data = prepare_json_cordex_cmip6(data_cordexcmip6)
+                prepared_data = prepare_json_cordex_cmip6(validate_typing_cordex_cmip6(contents))
             case "cmip6":
-                data_cmip6: CMIP6InputDict = TypeAdapter(CMIP6InputDict).validate_json(contents)
-                prepared_data = prepare_json_cmip6(data_cmip6)
+                prepared_data = prepare_json_cmip6(validate_typing_cmip6(contents))
             case "cmip6plus":
-                data_cmip6plus: CMIP6PlusInputDict = TypeAdapter(CMIP6PlusInputDict).validate_json(contents)
-                prepared_data = prepare_json_cmip6plus(data_cmip6plus)
+                prepared_data = prepare_json_cmip6plus(validate_typing_cmip6plus(contents))
             case "input4mip":
-                data_input4mip: Input4MipsInputDict = TypeAdapter(Input4MipsInputDict).validate_json(contents)
-                prepared_data = prepare_json_input4mip(data_input4mip, collection_path)
+                prepared_data = prepare_json_input4mip(validate_typing_input4mip(contents), collection_path)
             case _:
                 raise ValueError(repo.project)
 
@@ -233,6 +227,24 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                 )
 
     return result
+
+
+@task(log_prints=True)
+def validate_legacy_terms(terms: set[Term], project: str) -> tuple[set[Term], set[Term]]:
+    valid_terms: set[Term] = set()
+    invalid_terms: set[Term] = set()
+    for term in terms:
+        if project == "cordex-cmip6" and term.collection == "table_id":
+            term.collection = "frequency"
+        matching_term: list[MatchingTerm] = ev.valid_term_in_collection(
+            term.name, project, term.collection.lower()
+        )
+        if matching_term:
+            term.name = matching_term[0].term_id
+            valid_terms.add(term)
+        else:
+            invalid_terms.add(term)
+    return invalid_terms, valid_terms
 
 
 @task(log_prints=True)
@@ -346,7 +358,7 @@ def are_branch_consistent(project_repo: Repo, dev: bool):
     
     project_repo.pull()
 
-    invalid_legacy_terms = validate_legacy_terms(project_repo)
+    invalid_legacy_terms, valid_terms = validate_legacy_terms(project_repo.terms, project_repo.project)
 
     if invalid_legacy_terms:
         logger.error(format_output(project_repo, invalid_legacy_terms))
