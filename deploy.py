@@ -73,6 +73,6 @@ if __name__ == "__main__":
                 repo_reference.branch,
                 repo_reference.nicename.split("@")[0],
             ],
-            parameters={"project_repo": repo_reference},
+            parameters={"project_repo": repo_reference, "dev": False},
             cron="0 6 * * 1-5",
         )
