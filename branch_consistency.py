@@ -305,10 +305,56 @@ def config_esgvoc():
     current_state.synchronize_all()
 
 
+@task
+def config_custom_esgvoc():
+    dico = {
+        "projects": [
+            {
+                "project_name": "cmip6",
+                "github_repo": "https://github.com/alaupin-ipsl/CMIP6_CVs",
+                "branch": "esgvoc_dev",
+                "local_path": "repos/CMIP6_CVs",
+                "db_path": "dbs/cmip6.sqlite",
+                "offline_mode": False,
+            },
+            {
+                "project_name": "cmip6plus",
+                "github_repo": "https://github.com/alaupin-ipsl/CMIP6Plus_CVs",
+                "branch": "esgvoc_dev",
+                "local_path": "repos/CMIP6Plus_CVs",
+                "db_path": "dbs/cmip6plus.sqlite",
+                "offline_mode": False,
+            },
+            {
+                "project_name": "input4mip",
+                "github_repo": "https://github.com/alaupin-ipsl/input4MIPs_CVs",
+                "branch": "esgvoc_dev",
+                "local_path": "repos/input4MIPs_CVs",
+                "db_path": "dbs/input4mip.sqlite",
+                "offline_mode": False,
+            }
+        ],
+        "universe": {
+            "github_repo": "https://github.com/alaupin-ipsl/WCRP-universe",
+            "branch": "esgvoc_dev",
+            "local_path": "repos/WCRP-universe",
+            "db_path": "dbs/universe.sqlite",
+        },
+    }
+    config_manager.save_config(
+        dico, "coherence_dev"
+    )  # save le dico dans la config (toml) puis switch sur cette config
+    current_state.synchronize_all()
+
+
 @flow(log_prints=True)
-def are_branch_consistent(project_repo: Repo):
+def are_branch_consistent(project_repo: Repo, dev: bool):
     logger = get_run_logger()
-    config_esgvoc()
+
+    if not dev:
+        config_esgvoc()
+    else:
+        config_custom_esgvoc()
     
     project_repo.pull()
 
