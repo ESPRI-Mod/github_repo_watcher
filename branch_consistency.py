@@ -16,7 +16,7 @@ from pydantic import BaseModel, TypeAdapter
 import requests
 
 from esgvoc.core.service.state import ServiceSettings
-from esgvoc.core.service import config_manager, current_state
+from esgvoc.core import service
 import esgvoc.api as ev
 
 LEGACY_EXCLUDED_COLLECTIONS = [
@@ -497,10 +497,11 @@ def config_esgvoc():
         ],
     }
 
-    config_manager.save_config(
+    service.config_manager.save_config(
         dico, "coherence"
     )  # save le dico dans la config (toml) puis switch sur cette config
-    current_state.synchronize_all()
+    service.current_state = service.get_state()
+    service.current_state.synchronize_all()
 
 
 @task
@@ -543,10 +544,12 @@ def config_custom_esgvoc():
             "db_path": "dbs/universe.sqlite",
         },
     }
-    config_manager.save_config(
+    service.config_manager.save_config(
         dico, "coherence_dev"
     )  # save le dico dans la config (toml) puis switch sur cette config
-    current_state.synchronize_all()
+    service.current_state = service.get_state()
+    service.current_state.synchronize_all()
+
 
 
 @flow(log_prints=True)
