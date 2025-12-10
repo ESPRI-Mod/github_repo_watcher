@@ -513,6 +513,14 @@ def config_custom_esgvoc():
     dico = {
         "projects": [
             {
+                "project_name": "cordex-cmip6",
+                "github_repo": "https://github.com/WCRP-CORDEX/cordex-cmip6-cv",
+                "branch": "esgvoc_dev",
+                "local_path": "repos/cordex-cmip6-cv",
+                "db_path": "dbs/cmip6.sqlite",
+                "offline_mode": False,
+            },
+            {
                 "project_name": "cmip6",
                 "github_repo": "https://github.com/WCRP-CMIP/CMIP6_CVs",
                 "branch": "esgvoc_dev",
