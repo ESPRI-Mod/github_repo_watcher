@@ -1,23 +1,21 @@
-from collections import defaultdict
-from esgvoc.api.search import MatchingTerm
-import json
 import shutil
+from collections import defaultdict
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Self, TypeAlias
 
+import esgvoc.api as ev
+import requests
+from esgvoc.api.search import MatchingTerm
+from esgvoc.core import service
+from esgvoc.core.service.state import ServiceSettings
 from prefect import flow, get_run_logger, task
-from prefect.variables import Variable
+from prefect.blocks.system import Secret
 from prefect.runner.storage import GitRepository
 from prefect.runtime import flow_run
 from prefect.utilities.asyncutils import run_coro_as_sync
-from prefect.blocks.system import Secret
+from prefect.variables import Variable
 from pydantic import BaseModel, TypeAdapter
-import requests
-
-from esgvoc.core.service.state import ServiceSettings
-from esgvoc.core import service
-import esgvoc.api as ev
 
 LEGACY_EXCLUDED_COLLECTIONS = [
     "DRS",
@@ -25,22 +23,26 @@ LEGACY_EXCLUDED_COLLECTIONS = [
     "global_attrs",
 ]
 
+BASE_URL = Variable.get("nocodb_base_url")
+TABLE_ID = Variable.get("nocodb_repo_watcher_tables_ids")
+TABLE_URL = f"{BASE_URL}/{TABLE_ID}/records"
+
 # Type aliases for better readability
-ParamStr: TypeAlias = str
-ParamDict: TypeAlias = dict[str, Any]
-TermKey: TypeAlias = str
-TermDict: TypeAlias = dict[TermKey, ParamStr | ParamDict]
-CollectionKey: TypeAlias = str
-NotCollectionKey: TypeAlias = str
+type ParamStr = str
+type ParamDict = dict[str, Any]
+type TermKey = str
+type TermDict = dict[TermKey, ParamStr | ParamDict]
+type CollectionKey = str
+type NotCollectionKey = str
 
 # Input types for validating the json files
-CordexCMIP6InputDict: TypeAlias = dict[CollectionKey, list[TermKey] | TermDict]
-CMIP6InputDict: TypeAlias = dict[CollectionKey, list[TermKey] | TermDict]
-CMIP6PlusInputDict: TypeAlias = dict[CollectionKey, TermKey | list[TermKey] | TermDict]
-Input4MipsInputDict: TypeAlias = list[TermKey] | TermDict | dict[NotCollectionKey, TermDict]
+type CordexCMIP6InputDict = dict[CollectionKey, list[TermKey] | TermDict]
+type CMIP6InputDict = dict[CollectionKey, list[TermKey] | TermDict]
+type CMIP6PlusInputDict = dict[CollectionKey, TermKey | list[TermKey] | TermDict]
+type Input4MipsInputDict = list[TermKey] | TermDict | dict[NotCollectionKey, TermDict]
 
 # Output type after preparing the json files
-VocabularyDict: TypeAlias = dict[CollectionKey, TermDict]
+type VocabularyDict = dict[CollectionKey, TermDict]
 
 
 class Term(BaseModel):
@@ -99,12 +101,12 @@ class Repo(BaseModel):
 def validate_typing_cordex_cmip6(data: str) -> CordexCMIP6InputDict:
     """
     Validate the type of the input data for CORDEX-CMIP6.
-    
+
     Parameters
     ----------
     data : str
         The input data as a JSON string.
-    
+
     Returns
     -------
     CordexCMIP6InputDict
@@ -117,12 +119,12 @@ def validate_typing_cordex_cmip6(data: str) -> CordexCMIP6InputDict:
 def validate_typing_cmip6(data: str) -> CMIP6InputDict:
     """
     Validate the type of the input data for CMIP6.
-    
+
     Parameters
     ----------
     data : str
         The input data as a JSON string.
-    
+
     Returns
     -------
     CMIP6InputDict
@@ -135,12 +137,12 @@ def validate_typing_cmip6(data: str) -> CMIP6InputDict:
 def validate_typing_cmip6plus(data: str) -> CMIP6PlusInputDict:
     """
     Validate the type of the input data for CMIP6Plus.
-    
+
     Parameters
     ----------
     data : str
         The input data as a JSON string.
-    
+
     Returns
     -------
     CMIP6PlusInputDict
@@ -153,12 +155,12 @@ def validate_typing_cmip6plus(data: str) -> CMIP6PlusInputDict:
 def validate_typing_input4mip(data: str) -> Input4MipsInputDict:
     """
     Validate the type of the input data for Input4Mips.
-    
+
     Parameters
     ----------
     data : str
         The input data as a JSON string.
-    
+
     Returns
     -------
     Input4MipsInputDict
@@ -178,7 +180,7 @@ def prepare_json_cordex_cmip6(
     ----------
     data : CordexCMIP6InputDict
         The input data to prepare.
-    
+
     Returns
     -------
     VocabularyDict
@@ -187,7 +189,7 @@ def prepare_json_cordex_cmip6(
 
     result: VocabularyDict = {}
     skipped_collections = ["driving_variant_label"]
-    
+
     for collection_key, terms in data.items():
         # Ensure the CV path doesn't contain excluded collections
         if collection_key in skipped_collections:
@@ -214,7 +216,7 @@ def prepare_json_cmip6(data: CMIP6InputDict) -> VocabularyDict:
     ----------
     data : CMIP6InputDict
         The input data to prepare.
-    
+
     Returns
     -------
     VocabularyDict
@@ -249,13 +251,13 @@ def prepare_json_cmip6plus(data: CMIP6PlusInputDict) -> VocabularyDict:
     ----------
     data : CMIP6PlusInputDict
         The input data to prepare.
-    
+
     Returns
     -------
     VocabularyDict
         The prepared vocabulary dictionary.
     """
-    
+
     result: VocabularyDict = {}
     skipped_collections = ["Header"]
 
@@ -263,25 +265,26 @@ def prepare_json_cmip6plus(data: CMIP6PlusInputDict) -> VocabularyDict:
         # Ensure the CV path doesn't contain excluded collections
         if collection_key in skipped_collections:
             continue
-        else:
-            result[collection_key] = {}
 
-            # Handle all dict, list and str cases
-            match terms:
-                case dict():
-                    for term_key, term_content in terms.items():
-                        result[collection_key][term_key] = term_content
-                case list():
-                    for term_key in terms:
-                        result[collection_key][term_key] = {}
-                case str():
-                    result[collection_key][terms] = {}
+        result[collection_key] = {}
+
+        # Handle all dict, list and str cases
+        match terms:
+            case dict():
+                for term_key, term_content in terms.items():
+                    result[collection_key][term_key] = term_content
+            case list():
+                for term_key in terms:
+                    result[collection_key][term_key] = {}
+            case str():
+                result[collection_key][terms] = {}
 
     return result
 
 
 def prepare_json_input4mip(
-    data: Input4MipsInputDict, collection_path: Path
+    data: Input4MipsInputDict,
+    collection_path: Path,
 ) -> VocabularyDict:
     """
     Prepare the JSON data from Input4Mips for term extraction.
@@ -290,18 +293,18 @@ def prepare_json_input4mip(
     ----------
     data : Input4MipsInputDict
         The input data to prepare.
-    
+
     Returns
     -------
     VocabularyDict
         The prepared vocabulary dictionary.
     """
-    
+
     result: VocabularyDict = {}
     # Extract collection name from file path
     collection = collection_path.stem.removeprefix("input4MIPs_")
     result[collection] = {}
-    
+
     # Handle dict, target_mip and list cases
     match data:
         case dict() if collection == "target_mip":
@@ -327,7 +330,7 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
     ----------
     repo : Repo
         The repository to parse.
-    
+
     Returns
     -------
     set[Term]
@@ -350,31 +353,37 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
         # Prepare the data based on the project type
         match repo.project:
             case "cordex-cmip6":
-                prepared_data = prepare_json_cordex_cmip6(validate_typing_cordex_cmip6(contents))
+                prepared_data = prepare_json_cordex_cmip6(
+                    validate_typing_cordex_cmip6(contents),
+                )
             case "cmip6":
                 prepared_data = prepare_json_cmip6(validate_typing_cmip6(contents))
             case "cmip6plus":
-                prepared_data = prepare_json_cmip6plus(validate_typing_cmip6plus(contents))
+                prepared_data = prepare_json_cmip6plus(
+                    validate_typing_cmip6plus(contents),
+                )
             case "input4mip":
-                prepared_data = prepare_json_input4mip(validate_typing_input4mip(contents), collection_path)
+                prepared_data = prepare_json_input4mip(
+                    validate_typing_input4mip(contents), collection_path,
+                )
             case _:
                 raise ValueError(repo.project)
 
         # Extract Terms from the prepared data
         for collection_key, terms in prepared_data.items():
-            for term_key in terms.keys():
+            for term_key in terms:
                 result.add(
                     Term(
                         name=term_key,
                         collection=collection_key,
-                    )
+                    ),
                 )
 
     return result
 
 
 @task(log_prints=True)
-def validate_legacy_terms(terms: set[Term], project: str) -> tuple[set[Term], set[Term]]:
+def validate_legacy_terms(terms: set[Term], project: str) -> set[Term]:
     """
     Validate terms from the legacy branch using esgvoc.
 
@@ -384,7 +393,7 @@ def validate_legacy_terms(terms: set[Term], project: str) -> tuple[set[Term], se
         A set of Terms to validate.
     project : str
         The project name.
-    
+
     Returns
     -------
     invalid_terms : set[Term]
@@ -401,7 +410,7 @@ def validate_legacy_terms(terms: set[Term], project: str) -> tuple[set[Term], se
             term.collection = "frequency"
         # Search for the term in esgvoc
         matching_term: list[MatchingTerm] = ev.valid_term_in_collection(
-            term.name, project, term.collection.lower()
+            term.name, project, term.collection.lower(),
         )
 
         # Classify the term based on search results
@@ -410,11 +419,11 @@ def validate_legacy_terms(terms: set[Term], project: str) -> tuple[set[Term], se
             valid_terms.add(term)
         else:
             invalid_terms.add(term)
-    return invalid_terms, valid_terms
+    return invalid_terms
 
 
 @task(log_prints=True)
-def send_to_nocodb(repo: Repo):
+def send_to_nocodb(repo: Repo) -> None:
     """
     Send a record to NocoDB indicating that the repository has inconsistencies.
 
@@ -425,11 +434,8 @@ def send_to_nocodb(repo: Repo):
     """
 
     # Prepare NocoDB API request
-    API_KEY = Secret.load("nocodb-consistency-api-key").get()
-    HEADERS = {"xc-token": API_KEY, "Content-Type": "application/json"}
-    BASE_URL = Variable.get("nocodb_base_url")
-    TABLE_ID = Variable.get("nocodb_repo_watcher_tables_ids")
-    TABLE_URL = f"{BASE_URL}/{TABLE_ID}/records"
+    api_key = Secret.load("nocodb-consistency-api-key").get()
+    headers = {"xc-token": api_key, "Content-Type": "application/json"}
 
     # Prepare the payload
     payload = {
@@ -440,7 +446,7 @@ def send_to_nocodb(repo: Repo):
     }
 
     # Send the POST request to NocoDB
-    r_post = requests.post(TABLE_URL, json=payload, headers=HEADERS)
+    r_post = requests.post(TABLE_URL, json=payload, headers=headers)
     r_post.raise_for_status()
 
 
@@ -454,7 +460,7 @@ def format_output(repo: Repo, invalid_legacy_terms: set[Term]) -> str:
         The repository with invalid terms.
     invalid_legacy_terms : set[Term]
         A set of invalid Terms.
-    
+
     Returns
     -------
     str
@@ -478,7 +484,7 @@ def format_output(repo: Repo, invalid_legacy_terms: set[Term]) -> str:
 
 
 @task
-def config_esgvoc():
+def config_esgvoc() -> None:
     """
     Configure esgvoc with default project and universe repositories.
     """
@@ -505,11 +511,11 @@ def config_esgvoc():
 
 
 @task
-def config_custom_esgvoc():
+def config_custom_esgvoc() -> None:
     """
     Configure esgvoc with custom project and universe repositories for development.
     """
-    
+
     dico = {
         "projects": [
             {
@@ -543,7 +549,7 @@ def config_custom_esgvoc():
                 "local_path": "repos/input4MIPs_CVs",
                 "db_path": "dbs/input4mip.sqlite",
                 "offline_mode": False,
-            }
+            },
         ],
         "universe": {
             "github_repo": "https://github.com/WCRP-CMIP/WCRP-universe",
@@ -559,9 +565,8 @@ def config_custom_esgvoc():
     service.current_state.synchronize_all()
 
 
-
 @flow(log_prints=True)
-def are_branch_consistent(project_repo: Repo, dev: bool):
+def are_branch_consistent(project_repo: Repo, dev: bool) -> None:
     """
     Check the consistency of legacy terms in a repository against esgvoc.
 
@@ -580,12 +585,14 @@ def are_branch_consistent(project_repo: Repo, dev: bool):
         config_esgvoc()
     else:
         config_custom_esgvoc()
-    
+
     # Pull the latest changes from the repository
     project_repo.pull()
 
     # Validate legacy terms using esgvoc
-    invalid_legacy_terms, valid_terms = validate_legacy_terms(project_repo.terms, project_repo.project)
+    invalid_legacy_terms = validate_legacy_terms(
+        project_repo.terms, project_repo.project
+    )
 
     # Log and report invalid terms in NocoDB if any were found
     if invalid_legacy_terms:

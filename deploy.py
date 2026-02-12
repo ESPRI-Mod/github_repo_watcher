@@ -39,7 +39,9 @@ class Config(BaseModel):
 
 if __name__ == "__main__":
     with open("repos_config.yml") as f:
-        configs: list[Config] = [Config(**config) for config in yaml.safe_load(f)["repos"]]
+        configs: list[Config] = [
+            Config(**config) for config in yaml.safe_load(f)["repos"]
+        ]
 
     github_storage = GitHubRepository.load("repo-watcher")
     git_storage = SpiritGitRepository(
