@@ -1,7 +1,8 @@
 from typing import Any, override
-from prefect.runner.storage import GitRepository
+
 import yaml
 from prefect import flow
+from prefect.runner.storage import GitRepository
 from prefect_github import GitHubRepository
 from pydantic import BaseModel
 

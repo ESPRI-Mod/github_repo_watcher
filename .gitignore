@@ -174,3 +174,11 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
+typings/
+prefect.yaml
+uv.lock
+.gitignore
+.prefectignore
+.python-version
+uv.lock
+.vscode/settings.json

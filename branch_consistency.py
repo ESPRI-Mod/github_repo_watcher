@@ -2,7 +2,7 @@ import shutil
 from collections import defaultdict
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Self, TypeAlias
+from typing import Any, Self, override
 
 import esgvoc.api as ev
 import requests
@@ -53,9 +53,11 @@ class Term(BaseModel):
     def key(self) -> str:
         return f"{self.name.lower()}/{self.collection.lower()}"
 
+    @override
     def __eq__(self, other: Self) -> bool:
         return self.key == other.key
 
+    @override
     def __hash__(self) -> int:
         return hash(self.key)
 
@@ -591,7 +593,7 @@ def are_branch_consistent(project_repo: Repo, dev: bool) -> None:
 
     # Validate legacy terms using esgvoc
     invalid_legacy_terms = validate_legacy_terms(
-        project_repo.terms, project_repo.project
+        project_repo.terms, project_repo.project,
     )
 
     # Log and report invalid terms in NocoDB if any were found
