@@ -175,8 +175,7 @@ class Repo(BaseModel):
         """
         if self.project == "input4mip":
             return self.destination / "CVs"
-        else:
-            return self.destination
+        return self.destination
 
     def pull(self) -> None:
         """

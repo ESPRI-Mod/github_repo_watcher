@@ -6,7 +6,6 @@ across multiple repositories using Prefect workflows and GitHub integration.
 """
 
 from pathlib import Path
-from typing import Any, override
 
 import yaml
 from prefect import flow
