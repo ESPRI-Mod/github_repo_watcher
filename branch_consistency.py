@@ -1,5 +1,13 @@
+"""
+Module for checking branch consistency of vocabulary repositories.
+
+This module provides functionality to validate legacy terms from controlled
+vocabulary repositories against esgvoc, and report any inconsistencies to NocoDB.
+"""
+
 import shutil
 from collections import defaultdict
+from enum import Enum
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Self, override
@@ -45,12 +53,47 @@ type Input4MipsInputDict = list[TermKey] | TermDict | dict[NotCollectionKey, Ter
 type VocabularyDict = dict[CollectionKey, TermDict]
 
 
+class EsgvocConfig(Enum):
+    """
+    Enum for esgvoc configuration environments.
+
+    Attributes
+    ----------
+    dev : str
+        Development environment configuration.
+    prod : str
+        Production environment configuration.
+    """
+
+    dev = "dev"
+    prod = "prod"
+
+
 class Term(BaseModel):
+    """
+    Represents a vocabulary term with a name and collection.
+
+    Attributes
+    ----------
+    name : str
+        The name of the term.
+    collection : str
+        The collection the term belongs to.
+    """
+
     name: str
     collection: str
 
     @property
     def key(self) -> str:
+        """
+        Get the unique key for this term.
+
+        Returns
+        -------
+        str
+            The lowercase term name and collection joined by a slash.
+        """
         return f"{self.name.lower()}/{self.collection.lower()}"
 
     @override
@@ -63,38 +106,99 @@ class Term(BaseModel):
 
 
 class Repo(BaseModel):
+    """
+    Represents a repository with configuration for cloning and processing.
+
+    Attributes
+    ----------
+    url : str
+        The URL of the git repository.
+    branch : str
+        The branch name to checkout.
+    project : str
+        The project name (e.g., 'cordex-cmip6', 'cmip6', 'cmip6plus', 'input4mip').
+    """
+
     url: str
     branch: str
     project: str
 
     @property
     def git_repo(self) -> GitRepository:
+        """
+        Get the GitRepository object for this repository.
+
+        Returns
+        -------
+        GitRepository
+            A GitRepository configured with the repository URL and branch,
+            with storage base path set to /tmp.
+        """
         result = GitRepository(url=self.url, branch=self.branch)
         result._storage_base_path = Path("/tmp")
         return result
 
     @cached_property
     def terms(self) -> set[Term]:
+        """
+        Get the set of legacy terms from this repository.
+
+        Returns
+        -------
+        set[Term]
+            A set of Terms found in the repository's CV location.
+        """
         return parse_legacy_terms(self)
 
     @property
     def destination(self) -> Path:
+        """
+        Get the destination path for the cloned repository.
+
+        Returns
+        -------
+        Path
+            The local file system path where the repository is cloned.
+        """
         return self.git_repo.destination
 
     @property
     def cv_location(self) -> Path:
+        """
+        Get the controlled vocabulary location for this repository.
+
+        Returns
+        -------
+        Path
+            The path to the CVs directory for input4mip projects, or the
+            destination path for other projects.
+        """
         if self.project == "input4mip":
             return self.destination / "CVs"
         else:
             return self.destination
 
     def pull(self) -> None:
+        """
+        Pull the repository code to the destination path.
+
+        Removes the destination directory if it exists, then clones the
+        repository at the specified branch to the destination.
+        """
         if self.destination.is_dir():
             shutil.rmtree(self.destination)
         run_coro_as_sync(self.git_repo.pull_code())
 
     @property
     def nicename(self) -> str:
+        """
+        Get a human-readable name for this repository.
+
+        Returns
+        -------
+        str
+            The repository nicename in the format 'owner/repo@branch'.
+        """
         _, owner, repo = self.url.rsplit("/", 2)
         repo = repo.replace(".git", "")
         return f"{owner}/{repo}@{self.branch}"
@@ -366,7 +470,8 @@ def parse_legacy_terms(repo: Repo) -> set[Term]:
                 )
             case "input4mip":
                 prepared_data = prepare_json_input4mip(
-                    validate_typing_input4mip(contents), collection_path,
+                    validate_typing_input4mip(contents),
+                    collection_path,
                 )
             case _:
                 raise ValueError(repo.project)
@@ -412,7 +517,9 @@ def validate_legacy_terms(terms: set[Term], project: str) -> set[Term]:
             term.collection = "frequency"
         # Search for the term in esgvoc
         matching_term: list[MatchingTerm] = ev.valid_term_in_collection(
-            term.name, project, term.collection.lower(),
+            term.name,
+            project,
+            term.collection.lower(),
         )
 
         # Classify the term based on search results
@@ -448,7 +555,7 @@ def send_to_nocodb(repo: Repo) -> None:
     }
 
     # Send the POST request to NocoDB
-    r_post = requests.post(TABLE_URL, json=payload, headers=headers)
+    r_post = requests.post(TABLE_URL, json=payload, headers=headers, timeout=30)
     r_post.raise_for_status()
 
 
@@ -505,11 +612,14 @@ def config_esgvoc() -> None:
         ],
     }
 
-    service.config_manager.save_config(
-        dico, "coherence"
-    )  # save le dico dans la config (toml) puis switch sur cette config
-    service.current_state = service.get_state()
-    service.current_state.synchronize_all()
+    if service.config_manager is not None:
+        service.config_manager.save_config(
+            dico,
+            "coherence",
+        )  # save le dico dans la config (toml) puis switch sur cette config
+        service.current_state = service.get_state()
+        if service.current_state is not None:
+            service.current_state.synchronize_all()
 
 
 @task
@@ -561,14 +671,15 @@ def config_custom_esgvoc() -> None:
         },
     }
     service.config_manager.save_config(
-        dico, "coherence_dev"
+        dico,
+        "coherence_dev",
     )  # save le dico dans la config (toml) puis switch sur cette config
     service.current_state = service.get_state()
     service.current_state.synchronize_all()
 
 
 @flow(log_prints=True)
-def are_branch_consistent(project_repo: Repo, dev: bool) -> None:
+def are_branch_consistent(project_repo: Repo, esgvoc_config: EsgvocConfig) -> None:
     """
     Check the consistency of legacy terms in a repository against esgvoc.
 
@@ -576,24 +687,25 @@ def are_branch_consistent(project_repo: Repo, dev: bool) -> None:
     ----------
     project_repo : Repo
         The repository to check.
-    dev : bool
+    esgvoc_config : EsgvocConfig
         Whether to use the development configuration for esgvoc.
     """
 
     logger = get_run_logger()
 
     # Ensure that esgvoc is configured and up to date
-    if not dev:
-        config_esgvoc()
-    else:
+    if esgvoc_config == EsgvocConfig.dev:
         config_custom_esgvoc()
+    else:
+        config_esgvoc()
 
     # Pull the latest changes from the repository
     project_repo.pull()
 
     # Validate legacy terms using esgvoc
     invalid_legacy_terms = validate_legacy_terms(
-        project_repo.terms, project_repo.project,
+        project_repo.terms,
+        project_repo.project,
     )
 
     # Log and report invalid terms in NocoDB if any were found
