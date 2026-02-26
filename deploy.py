@@ -6,6 +6,7 @@ across multiple repositories using Prefect workflows and GitHub integration.
 """
 
 from pathlib import Path
+from typing import Any, override
 
 import yaml
 from prefect import flow
@@ -14,6 +15,35 @@ from prefect_github import GitHubRepository
 from pydantic import BaseModel
 
 from branch_consistency import EsgvocConfig, Repo
+
+
+class SpiritGitRepository(GitRepository):
+    """
+    Custom GitRepository implementation for Prefect deployments on SLURM systems.
+
+    Extends GitRepository to add SLURM-specific setup steps for cloning repositories
+    in temporary job directories.
+    """
+
+    @override
+    def to_pull_step(self) -> list[dict[str, Any]]:
+        git_clone_step = super().to_pull_step()
+        mkdir_step = {
+            "prefect.deployments.steps.run_shell_script": {
+                "script": "mkdir -p /tmp/$SLURM_JOBID/",
+                "expand_env_vars": True,
+            },
+        }
+        cd_tmp_jobid_step = {
+            "prefect.deployments.steps.set_working_directory": {
+                "directory": "/tmp/{{ $SLURM_JOBID }}/",
+            },
+        }
+        return [
+            mkdir_step,
+            cd_tmp_jobid_step,
+            git_clone_step,
+        ]
 
 
 class Config(BaseModel):
@@ -32,7 +62,7 @@ if __name__ == "__main__":
         ]
 
     github_storage = GitHubRepository.load("repo-watcher")
-    git_storage = GitRepository(
+    git_storage = SpiritGitRepository(
         url=github_storage.repository_url,
         branch=github_storage.reference,
         credentials=github_storage.credentials,
