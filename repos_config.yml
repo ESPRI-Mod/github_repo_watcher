@@ -1,25 +1,115 @@
-repos:
-  - owner: WCRP-CORDEX
-    repo: cordex-cmip6-cv
-    reference_branch: main
+checks:
+  # ──────────────────────────────────────────────────────────
+  # Community branch vs esgvoc registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cordex-cmip6-consistency
+    source:
+      type: git
+      owner: WCRP-CORDEX
+      repo: cordex-cmip6-cv
+      branch: main
+    reference:
+      type: registry
+      project: cordex-cmip6
     project: cordex-cmip6
-  - owner: PCMDI
-    repo: input4MIPs_CVs
-    reference_branch: main
-    project: input4mip
-  - owner: WCRP-CMIP
-    repo: CMIP6Plus_CVs
-    reference_branch: main
-    project: cmip6plus
-  - owner: WCRP-CMIP
-    repo: CMIP6_CVs
-    reference_branch: main
+    skip_collections:
+      - driving_variant_label
+    collection_mappings:
+      table_id: frequency
+
+  - name: cmip6-consistency
+    source:
+      type: git
+      owner: WCRP-CMIP
+      repo: CMIP6_CVs
+      branch: main
+    reference:
+      type: registry
+      project: cmip6
     project: cmip6
-  - owner: WCRP-CMIP
-    repo: Variable-Registry
-    reference_branch: null
-    project: Variable-Registry
-  - owner: alaupin-ipsl
-    repo: CMIP7_CVs
-    reference_branch: null
-    project: CMIP7
+    skip_collections:
+      - version_metadata
+
+  - name: cmip6plus-consistency
+    source:
+      type: git
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: main
+    reference:
+      type: registry
+      project: cmip6plus
+    project: cmip6plus
+    skip_collections:
+      - Header
+
+  - name: input4mip-consistency
+    source:
+      type: git
+      owner: PCMDI
+      repo: input4MIPs_CVs
+      branch: main
+    reference:
+      type: registry
+      project: input4mip
+    project: input4mip
+
+  # ──────────────────────────────────────────────────────────
+  # CMIP7: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cmip7-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP7-CVs
+      branch: esgvoc
+    reference:
+      type: registry
+      project: cmip7
+    project: cmip7
+    skip_collections:
+      - drs_specs
+
+  - name: cmip7-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP7-CVs
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: cmip7
+    project: cmip7
+    skip_collections:
+      - drs_specs
+
+  # ──────────────────────────────────────────────────────────
+  # EMD src-data vs CMIP7 registry (field-level)
+  # ──────────────────────────────────────────────────────────
+
+  - name: emd-vs-cmip7-registry
+    source:
+      type: git_emd
+      owner: WCRP-CMIP
+      repo: Essential-Model-Documentation
+      branch: src-data
+    reference:
+      type: registry
+      project: cmip7
+    project: cmip7
+    only_collections:
+      - source
+      - grid_label
+    field_mappings:
+      model:
+        target_collection: source
+        fields:
+          validation_key: drs_name
+          description: description
+      horizontal_grid_cell:
+        target_collection: grid_label
+        fields:
+          validation_key: drs_name
+          description: description

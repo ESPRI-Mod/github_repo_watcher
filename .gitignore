@@ -182,3 +182,4 @@ uv.lock
 .python-version
 uv.lock
 .vscode/settings.json
+md_dir/upgrade_plan.md
