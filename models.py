@@ -60,6 +60,7 @@ class CheckConfig:
     only_collections: list[str] | None = None
     collection_mappings: dict[str, str] | None = None
     field_mappings: dict[str, dict[str, Any]] | None = None
+    exclude_terms: dict[str, list[str]] | None = None
 
 
 @dataclass

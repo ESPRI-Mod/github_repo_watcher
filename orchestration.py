@@ -126,6 +126,7 @@ def check_consistency(check: CheckConfig) -> ConsistencyResult | None:
         source_label=source.label(),
         reference_label=reference.label(),
         collection_mappings=check.collection_mappings,
+        exclude_terms=check.exclude_terms,
     )
 
     if not result.is_consistent:

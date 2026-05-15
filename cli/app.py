@@ -14,6 +14,7 @@ import typer
 import yaml
 
 from comparison import compare_terms
+from generation import generate_missing_terms, write_report
 from models import CheckConfig, ProjectResult, ReportMode
 from sources import EsgvocRegistrySource, GitRepoEmdSource, GitRepoEsgvocFormatSource, GitRepoSource, TermSource
 
@@ -71,6 +72,7 @@ def _run_check(check: CheckConfig, mode: ReportMode = ReportMode.missing_in_ref)
         source_label=source.label(),
         reference_label=ref.label(),
         collection_mappings=check.collection_mappings,
+        exclude_terms=check.exclude_terms,
     )
 
     typer.echo()
@@ -172,11 +174,101 @@ def project(
             source_label=src_label,
             reference_label=ref.label(),
             collection_mappings=chk.collection_mappings,
+            exclude_terms=chk.exclude_terms,
         )
         proj_result.check_results.append((src_label, result))
 
     typer.echo()
     typer.echo(proj_result.format_report(mode=mode, detail=detail))
+
+
+@app.command()
+def generate_missing(
+    project_name: Annotated[str, typer.Argument(help="Project id (e.g. cmip7).")],
+    universe_repo: Annotated[Path, typer.Option(help="Path to local WCRP-universe repo.")] = Path("../WCRP-universe"),
+    project_repo: Annotated[Path, typer.Option(help="Path to local project repo.")] = Path("../CMIP7_CVs"),
+    config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
+    collections: Annotated[Optional[list[str]], typer.Option(help="Only generate for these collections.")] = None,
+    write: Annotated[bool, typer.Option("--write", help="Actually write the files (default is dry-run).")] = False,
+) -> None:
+    """Show what term files would need to be created in universe and project repos."""
+    if not universe_repo.is_dir():
+        typer.echo(f"Universe repo not found: {universe_repo}", err=True)
+        raise typer.Exit(code=1)
+    if not project_repo.is_dir():
+        typer.echo(f"Project repo not found: {project_repo}", err=True)
+        raise typer.Exit(code=1)
+
+    checks = _load_checks(config)
+    matching = [c for c in checks if c.project == project_name]
+    if not matching:
+        available = sorted({c.project for c in checks})
+        typer.echo(f"No checks for project '{project_name}'. Available: {', '.join(available)}", err=True)
+        raise typer.Exit(code=1)
+
+    # Merge all exclude_terms patterns across checks
+    merged_excludes: dict[str, list[str]] = {}
+    for chk in matching:
+        if chk.exclude_terms:
+            for col, patterns in chk.exclude_terms.items():
+                merged_excludes.setdefault(col, []).extend(patterns)
+
+    # Collect all terms missing from the reference across all checks
+    all_missing: set = set()
+    for chk in matching:
+        source = _build_source(chk.source)
+        ref = _build_source(chk.reference)
+
+        typer.echo(f"[{chk.name}] Fetching {source.label()}...")
+        source_terms = source.get_terms(
+            project=chk.project,
+            only_collections=chk.only_collections,
+            skip_collections=chk.skip_collections,
+            field_mappings=chk.field_mappings,
+        )
+
+        typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
+        ref_terms = ref.get_terms(
+            project=chk.project,
+            only_collections=chk.only_collections,
+            skip_collections=chk.skip_collections,
+            field_mappings=chk.field_mappings,
+        )
+
+        result = compare_terms(
+            source_terms=source_terms,
+            reference_terms=ref_terms,
+            source_label=source.label(),
+            reference_label=ref.label(),
+            collection_mappings=chk.collection_mappings,
+            exclude_terms=chk.exclude_terms,
+        )
+        all_missing |= result.in_source_not_reference
+
+    if merged_excludes:
+        from comparison import _apply_exclusions
+        all_missing = _apply_exclusions(all_missing, merged_excludes)
+
+    if collections:
+        all_missing = {t for t in all_missing if t.collection in collections}
+
+    if not all_missing:
+        typer.echo("No missing terms found.")
+        raise typer.Exit()
+
+    report = generate_missing_terms(
+        missing_terms=all_missing,
+        universe_repo=universe_repo,
+        project_repo=project_repo,
+    )
+
+    typer.echo()
+    typer.echo(report.format_report())
+
+    if write:
+        write_report(report, universe_repo, project_repo)
+        n = len(report.universe_to_create) + len(report.project_to_create)
+        typer.echo(f"\n{n} file(s) written. Review the generated skeletons and fill in placeholder values.")
 
 
 @app.command()

@@ -71,6 +71,9 @@ checks:
     project: cmip7
     skip_collections:
       - drs_specs
+    exclude_terms:
+      grid_label:
+        - "^tempgrid"
 
   - name: cmip7-esgvoc-dev-vs-registry
     source:
@@ -84,6 +87,9 @@ checks:
     project: cmip7
     skip_collections:
       - drs_specs
+    exclude_terms:
+      grid_label:
+        - "^tempgrid"
 
   # ──────────────────────────────────────────────────────────
   # EMD src-data vs CMIP7 registry (field-level)
