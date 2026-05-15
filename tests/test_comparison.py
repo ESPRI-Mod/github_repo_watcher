@@ -1,7 +1,7 @@
 """Tests for comparison.py — pure set operations, no network."""
 
 from comparison import compare_terms
-from models import Term
+from models import ReportMode, Term
 
 
 def test_identical_sets():
@@ -63,7 +63,7 @@ def test_format_report_groups_by_collection():
         Term(name="NOPE", collection="frequency"),
     }
     result = compare_terms(source, set(), "source", "ref")
-    report = result.format_report()
+    report = result.format_report(mode=ReportMode.missing_in_ref)
     assert "activity_id:" in report
     assert "frequency:" in report
     assert "FAKE1" in report

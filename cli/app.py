@@ -14,7 +14,7 @@ import typer
 import yaml
 
 from comparison import compare_terms
-from models import CheckConfig
+from models import CheckConfig, ProjectResult, ReportMode
 from sources import EsgvocRegistrySource, GitRepoEmdSource, GitRepoEsgvocFormatSource, GitRepoSource, TermSource
 
 app = typer.Typer(
@@ -43,7 +43,7 @@ def _build_source(cfg: dict) -> TermSource:
     raise typer.BadParameter(msg)
 
 
-def _run_check(check: CheckConfig) -> None:
+def _run_check(check: CheckConfig, mode: ReportMode = ReportMode.missing_in_ref) -> None:
     source = _build_source(check.source)
     ref = _build_source(check.reference)
 
@@ -74,7 +74,7 @@ def _run_check(check: CheckConfig) -> None:
     )
 
     typer.echo()
-    typer.echo(result.format_report())
+    typer.echo(result.format_report(mode=mode))
 
 
 def _load_checks(config_path: Path) -> list[CheckConfig]:
@@ -87,6 +87,7 @@ def _load_checks(config_path: Path) -> list[CheckConfig]:
 def check(
     name: Annotated[str, typer.Argument(help="Name of the check to run from repos_config.yml.")],
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
+    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
 ) -> None:
     """Run a single consistency check by name."""
     checks = _load_checks(config)
@@ -95,12 +96,13 @@ def check(
         available = ", ".join(c.name for c in checks)
         typer.echo(f"Check '{name}' not found. Available: {available}", err=True)
         raise typer.Exit(code=1)
-    _run_check(matching[0])
+    _run_check(matching[0], mode=mode)
 
 
 @app.command()
 def check_all(
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
+    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
 ) -> None:
     """Run all consistency checks from the config file."""
     checks = _load_checks(config)
@@ -108,7 +110,7 @@ def check_all(
         if i > 0:
             typer.echo("\n" + "=" * 60 + "\n")
         typer.echo(typer.style(f"[{c.name}]", bold=True))
-        _run_check(c)
+        _run_check(c, mode=mode)
 
 
 @app.command()
@@ -124,6 +126,60 @@ def list_checks(
 
 
 @app.command()
+def project(
+    project_name: Annotated[str, typer.Argument(help="Project id to check (e.g. cmip7). Runs all checks matching this project.")],
+    config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
+    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
+    detail: Annotated[bool, typer.Option("--detail", help="Show per-source breakdown.")] = False,
+) -> None:
+    """Run all checks for a project and show a unified report."""
+    checks = _load_checks(config)
+    matching = [c for c in checks if c.project == project_name]
+    if not matching:
+        available = sorted({c.project for c in checks})
+        typer.echo(f"No checks for project '{project_name}'. Available: {', '.join(available)}", err=True)
+        raise typer.Exit(code=1)
+
+    ref_label = _source_label(matching[0].reference)
+    proj_result = ProjectResult(project=project_name, reference_label=ref_label)
+
+    for chk in matching:
+        source = _build_source(chk.source)
+        ref = _build_source(chk.reference)
+        src_label = source.label()
+
+        typer.echo(f"[{chk.name}] Fetching {src_label}...")
+        source_terms = source.get_terms(
+            project=chk.project,
+            only_collections=chk.only_collections,
+            skip_collections=chk.skip_collections,
+            field_mappings=chk.field_mappings,
+        )
+        typer.echo(f"  -> {len(source_terms)} terms")
+
+        typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
+        ref_terms = ref.get_terms(
+            project=chk.project,
+            only_collections=chk.only_collections,
+            skip_collections=chk.skip_collections,
+            field_mappings=chk.field_mappings,
+        )
+        typer.echo(f"  -> {len(ref_terms)} terms")
+
+        result = compare_terms(
+            source_terms=source_terms,
+            reference_terms=ref_terms,
+            source_label=src_label,
+            reference_label=ref.label(),
+            collection_mappings=chk.collection_mappings,
+        )
+        proj_result.check_results.append((src_label, result))
+
+    typer.echo()
+    typer.echo(proj_result.format_report(mode=mode, detail=detail))
+
+
+@app.command()
 def git_vs_registry(
     owner: Annotated[str, typer.Argument(help="GitHub owner (e.g. WCRP-CMIP).")],
     repo: Annotated[str, typer.Argument(help="GitHub repo name (e.g. CMIP6_CVs).")],
@@ -132,6 +188,7 @@ def git_vs_registry(
     skip: Annotated[Optional[list[str]], typer.Option(help="Collections to skip.")] = None,
     only: Annotated[Optional[list[str]], typer.Option(help="Only check these collections.")] = None,
     collection_mapping: Annotated[Optional[list[str]], typer.Option(help="Collection mapping as key=value.")] = None,
+    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
 ) -> None:
     """Ad-hoc check: compare a git repo branch against the esgvoc registry."""
     mappings = None
@@ -150,7 +207,7 @@ def git_vs_registry(
         only_collections=only,
         collection_mappings=mappings,
     )
-    _run_check(check_cfg)
+    _run_check(check_cfg, mode=mode)
 
 
 if __name__ == "__main__":
