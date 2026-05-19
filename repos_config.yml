@@ -52,6 +52,39 @@ checks:
     project: cmip6plus
     skip_collections:
       - Header
+      - license
+    term_overrides:
+      tracking_id:
+        "hdl:21.14100/.*":
+          universe_term: prefuuid
+          fields:
+            regex: "^hdl:21\\.14100/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"
+
+  # ──────────────────────────────────────────────────────────
+  # CMIP6Plus: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cmip6plus-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: esgvoc
+    reference:
+      type: registry
+      project: cmip6plus
+    project: cmip6plus
+
+  - name: cmip6plus-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: cmip6plus
+    project: cmip6plus
 
   - name: input4mip-consistency
     source:

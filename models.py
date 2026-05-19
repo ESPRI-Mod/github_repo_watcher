@@ -64,6 +64,7 @@ class CheckConfig:
     universe_type_mappings: dict[str, str] | None = None
     generation_defaults: dict[str, dict[str, Any]] | None = None
     term_id_transforms: dict[str, list[dict[str, str]]] | None = None
+    term_overrides: dict[str, dict[str, dict[str, Any]]] | None = None
 
 
 @dataclass

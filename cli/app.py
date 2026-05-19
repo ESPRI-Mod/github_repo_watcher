@@ -209,11 +209,14 @@ def generate_missing(
     universe_repo: Annotated[Path, typer.Option(help="Path to local WCRP-universe repo.")] = Path("../WCRP-universe"),
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
     collections: Annotated[Optional[list[str]], typer.Option(help="Only generate for these collections.")] = None,
-    write: Annotated[bool, typer.Option("--write", help="Actually write the files (default is dry-run).")] = False,
+    write: Annotated[Optional[Path], typer.Option("--write", help="Write files to this local project repo path.")] = None,
 ) -> None:
     """Show what term files would need to be created in universe and project repos."""
     if not universe_repo.is_dir():
         typer.echo(f"Universe repo not found: {universe_repo}", err=True)
+        raise typer.Exit(code=1)
+    if write is not None and not write.is_dir():
+        typer.echo(f"Write target not found: {write}", err=True)
         raise typer.Exit(code=1)
 
     checks = _load_checks(config)
@@ -228,6 +231,7 @@ def generate_missing(
     merged_universe_type_mappings: dict[str, str] = {}
     merged_generation_defaults: dict[str, dict[str, Any]] = {}
     merged_term_id_transforms: dict[str, list[dict[str, str]]] = {}
+    merged_term_overrides: dict[str, dict[str, dict[str, Any]]] = {}
     for chk in matching:
         if chk.exclude_terms:
             for col, patterns in chk.exclude_terms.items():
@@ -240,6 +244,9 @@ def generate_missing(
         if chk.term_id_transforms:
             for col, rules in chk.term_id_transforms.items():
                 merged_term_id_transforms.setdefault(col, []).extend(rules)
+        if chk.term_overrides:
+            for col, overrides in chk.term_overrides.items():
+                merged_term_overrides.setdefault(col, {}).update(overrides)
 
     # Collect all terms missing from the reference across all checks
     all_missing: set = set()
@@ -300,17 +307,15 @@ def generate_missing(
     # 3) Config overrides (last resort for exceptional cases)
     type_mapping.update(merged_universe_type_mappings)
 
-    # Use the first esgvoc-format source repo (has context files) for project links,
+    # Collect esgvoc-format repos (have context files) for project link checks,
     # fall back to any available source repo
-    project_repo_path: Path | None = None
-    for repo_path in source_repo_paths:
-        if detect_collection_mapping(repo_path):
-            project_repo_path = repo_path
-            break
-    if project_repo_path is None and source_repo_paths:
-        project_repo_path = source_repo_paths[0]
+    project_repo_paths: list[Path] = [
+        p for p in source_repo_paths if detect_collection_mapping(p)
+    ]
+    if not project_repo_paths:
+        project_repo_paths = list(source_repo_paths)
 
-    if project_repo_path is None:
+    if not project_repo_paths:
         typer.echo("No source repo path available for generation.", err=True)
         raise typer.Exit(code=1)
 
@@ -328,18 +333,22 @@ def generate_missing(
     report = generate_missing_terms(
         missing_terms=all_missing,
         universe_repo=universe_repo,
-        project_repo=project_repo_path,
+        project_repos=project_repo_paths,
         universe_type_overrides=type_mapping or None,
         generation_defaults=merged_generation_defaults or None,
+        term_overrides=merged_term_overrides or None,
     )
 
     typer.echo()
-    typer.echo(report.format_report())
+    if not report.has_work:
+        typer.echo(typer.style(report.format_report(), fg=typer.colors.GREEN))
+    else:
+        typer.echo(report.format_report())
 
-    if write:
-        write_report(report, universe_repo, project_repo_path)
+    if write is not None:
+        write_report(report, universe_repo, write)
         n = len(report.universe_to_create) + len(report.project_to_create)
-        typer.echo(f"\n{n} file(s) written. Review the generated skeletons and fill in placeholder values.")
+        typer.echo(f"\n{n} file(s) written to {write.resolve()}. Review the generated skeletons and fill in placeholder values.")
 
 
 @app.command()

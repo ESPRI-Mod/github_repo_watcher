@@ -101,20 +101,25 @@ def _build_project_link(descriptor: str, term_id: str) -> dict:
 def generate_missing_terms(
     missing_terms: set[Term],
     universe_repo: Path,
-    project_repo: Path,
+    project_repos: list[Path],
     universe_type_overrides: dict[str, str] | None = None,
     generation_defaults: dict[str, dict[str, Any]] | None = None,
+    term_overrides: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> GenerationReport:
     """Plan the generation of JSON files for missing terms in both repos.
 
     Currently only supports dry-run (reporting what would be created).
     For each missing term:
-    1. Check if it exists in universe. If not, plan a skeleton in universe repo.
-    2. Plan a project link in project repo.
+    1. Check if it matches a term_override — if so, create a project-level
+       override of an existing universe term (with field overrides).
+    2. Otherwise check if it exists in universe. If not, plan a skeleton.
+    3. Plan a project link — checks all project_repos for existence.
 
     Returns a report of what would be created.
     """
-    mapping = detect_collection_mapping(project_repo)
+    mapping: dict[str, str] = {}
+    for repo in project_repos:
+        mapping.update(detect_collection_mapping(repo))
     if universe_type_overrides:
         mapping.update(universe_type_overrides)
     report = GenerationReport()
@@ -137,16 +142,48 @@ def generate_missing_terms(
             report.skipped.append((term.collection, term.name, f"no mapping for collection '{term.collection}'"))
             continue
 
+        # esgvoc IDs are always lowercase
+        term_id = term.name.lower()
+
+        # Check for term overrides (e.g. tracking_id: reuse universe "prefuuid"
+        # with project-specific regex)
+        collection_overrides = term_overrides.get(term.collection) if term_overrides else None
+        if collection_overrides and term.name in collection_overrides:
+            override_cfg = collection_overrides[term.name]
+            override_id = override_cfg["universe_term"]
+            override_fields = override_cfg.get("fields", {})
+            # Build a project-level override (universe term + field overrides)
+            override_json = {
+                "@context": CONTEXT_FILENAME,
+                "id": override_id,
+                "type": descriptor,
+            }
+            override_json.update(override_fields)
+            found = False
+            for repo in project_repos:
+                override_file = repo / term.collection / f"{override_id}.json"
+                if override_file.exists():
+                    report.project_existed.append((term.collection, override_id))
+                    found = True
+                    break
+            if not found:
+                # Use the first repo that has the collection directory
+                for repo in project_repos:
+                    if (repo / term.collection).is_dir():
+                        report.project_to_create.append((term.collection, override_id, override_json))
+                        break
+            continue
+
         # Check universe
-        universe_term_file = universe_repo / descriptor / f"{term.name}.json"
+        universe_term_file = universe_repo / descriptor / f"{term_id}.json"
         if universe_term_file.exists():
-            report.universe_existed.append((descriptor, term.name))
+            report.universe_existed.append((descriptor, term_id))
         else:
             universe_descriptor_dir = universe_repo / descriptor
             if not universe_descriptor_dir.is_dir():
-                report.skipped.append((term.collection, term.name, f"universe descriptor dir '{descriptor}' not found"))
+                report.skipped.append((term.collection, term_id, f"universe descriptor dir '{descriptor}' not found"))
                 continue
-            skeleton = _build_universe_skeleton(universe_repo, descriptor, term.name)
+            skeleton = _build_universe_skeleton(universe_repo, descriptor, term_id)
             # Pre-populate with known values from field-level terms (e.g. EMD)
             field_values = known_values.get((term.collection, term.name), {})
             for field_name, value in field_values.items():
@@ -157,18 +194,24 @@ def generate_missing_terms(
                 for field_name, default_value in generation_defaults[term.collection].items():
                     if field_name in skeleton and skeleton[field_name] is None:
                         skeleton[field_name] = default_value
-            report.universe_to_create.append((descriptor, term.name, skeleton))
+            report.universe_to_create.append((descriptor, term_id, skeleton))
 
-        # Project link (only if collection directory exists in project repo)
-        project_collection_dir = project_repo / term.collection
-        if not project_collection_dir.is_dir():
-            continue
-        link = _build_project_link(descriptor, term.name)
-        project_term_file = project_collection_dir / f"{term.name}.json"
-        if project_term_file.exists():
-            report.project_existed.append((term.collection, term.name))
-        else:
-            report.project_to_create.append((term.collection, term.name, link))
+        # Project link — check across all project repos
+        found_in_project = False
+        has_collection_dir = False
+        for repo in project_repos:
+            project_collection_dir = repo / term.collection
+            if not project_collection_dir.is_dir():
+                continue
+            has_collection_dir = True
+            project_term_file = project_collection_dir / f"{term_id}.json"
+            if project_term_file.exists():
+                report.project_existed.append((term.collection, term_id))
+                found_in_project = True
+                break
+        if not found_in_project and has_collection_dir:
+            link = _build_project_link(descriptor, term_id)
+            report.project_to_create.append((term.collection, term_id, link))
 
     return report
 
@@ -193,8 +236,15 @@ class GenerationReport:
     project_existed: list[tuple[str, str]] = field(default_factory=list)
     skipped: list[tuple[str, str, str]] = field(default_factory=list)
 
+    @property
+    def has_work(self) -> bool:
+        return bool(self.universe_to_create or self.project_to_create)
+
     def format_report(self) -> str:
         lines: list[str] = []
+
+        if not self.has_work:
+            return "Nothing to generate — all terms are up to date."
 
         if self.universe_to_create:
             lines.append(f"Universe terms to create ({len(self.universe_to_create)}):")
@@ -228,8 +278,5 @@ class GenerationReport:
             lines.append(f"Skipped ({len(self.skipped)}):")
             for collection, term_id, reason in self.skipped:
                 lines.append(f"  {collection}/{term_id}: {reason}")
-
-        if not lines:
-            lines.append("Nothing to generate.")
 
         return "\n".join(lines)
