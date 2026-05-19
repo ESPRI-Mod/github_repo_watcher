@@ -8,10 +8,10 @@ from __future__ import annotations
 import re
 import sys
 
-from models import ConsistencyResult, Term
+from models import ConsistencyResult, Term, TermIdTransform
 
 
-def apply_term_id_transforms(terms: set[Term], transforms: dict[str, list[dict[str, str]]]) -> set[Term]:
+def apply_term_id_transforms(terms: set[Term], transforms: dict[str, list[TermIdTransform]]) -> set[Term]:
     """Apply string replacements to term names for specified collections.
 
     transforms maps collection -> list of {pattern, replace} dicts.

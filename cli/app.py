@@ -17,7 +17,7 @@ import esgvoc.api as ev
 
 from comparison import apply_term_id_transforms, compare_terms
 from generation import generate_missing_terms, write_report
-from models import CheckConfig, ProjectResult, ReportMode
+from models import CheckConfig, MultiStepConfig, ProjectResult, ReportMode, TermIdTransform, TermOverrideConfig
 from sources import EsgvocRegistrySource, GitRepoEmdSource, GitRepoEsgvocFormatSource, GitRepoSource, TermSource
 
 app = typer.Typer(
@@ -230,9 +230,9 @@ def generate_missing(
     merged_excludes: dict[str, list[str]] = {}
     merged_universe_type_mappings: dict[str, str] = {}
     merged_generation_defaults: dict[str, dict[str, Any]] = {}
-    merged_term_id_transforms: dict[str, list[dict[str, str]]] = {}
-    merged_term_overrides: dict[str, dict[str, dict[str, Any]]] = {}
-    merged_multi_step_terms: dict[str, dict[str, Any]] = {}
+    merged_term_id_transforms: dict[str, list[TermIdTransform]] = {}
+    merged_term_overrides: dict[str, dict[str, TermOverrideConfig]] = {}
+    merged_multi_step_terms: dict[str, MultiStepConfig] = {}
     merged_source_prefill: dict[str, dict[str, str]] = {}
     for chk in matching:
         if chk.exclude_terms:

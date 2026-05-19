@@ -9,14 +9,12 @@ from __future__ import annotations
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any
-
 import esgvoc.api as ev
 from prefect.runner.storage import GitRepository
 from prefect.utilities.asyncutils import run_coro_as_sync
 
 from extraction import extract_terms, extract_terms_emd, extract_terms_esgvoc_format
-from models import Term
+from models import FieldMappingConfig, Term
 
 
 class TermSource(ABC):
@@ -28,7 +26,7 @@ class TermSource(ABC):
         project: str,
         only_collections: list[str] | None = None,
         skip_collections: list[str] | None = None,
-        field_mappings: dict[str, dict[str, Any]] | None = None,
+        field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]: ...
 
     @abstractmethod
@@ -55,7 +53,7 @@ class GitRepoSource(TermSource):
         project: str,
         only_collections: list[str] | None = None,
         skip_collections: list[str] | None = None,
-        field_mappings: dict[str, dict[str, Any]] | None = None,
+        field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
         repo_dir = self._clone()
         cv_dir = repo_dir / "CVs" if project == "input4mip" else repo_dir
@@ -99,7 +97,7 @@ class GitRepoEsgvocFormatSource(TermSource):
         project: str,
         only_collections: list[str] | None = None,
         skip_collections: list[str] | None = None,
-        field_mappings: dict[str, dict[str, Any]] | None = None,
+        field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
         repo_dir = self._clone()
         return extract_terms_esgvoc_format(
@@ -140,7 +138,7 @@ class GitRepoEmdSource(TermSource):
         project: str,
         only_collections: list[str] | None = None,
         skip_collections: list[str] | None = None,
-        field_mappings: dict[str, dict[str, Any]] | None = None,
+        field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
         if not field_mappings:
             msg = "GitRepoEmdSource requires field_mappings"
@@ -181,7 +179,7 @@ class EsgvocRegistrySource(TermSource):
         project: str,
         only_collections: list[str] | None = None,
         skip_collections: list[str] | None = None,
-        field_mappings: dict[str, dict[str, Any]] | None = None,
+        field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
         collections = ev.get_all_collections_in_project(
             self.project, version=self.version

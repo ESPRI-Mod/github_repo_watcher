@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from models import Term
+from models import FieldMappingConfig, Term
 
 # Type aliases
 type ParamStr = str
@@ -125,7 +125,7 @@ def _prepare_json_input4mip(
 
 def _extract_field_level_terms(
     terms: TermDict,
-    mapping: dict[str, Any],
+    mapping: FieldMappingConfig,
 ) -> set[Term]:
     """Extract field-level terms for EMD-style checks."""
     result: set[Term] = set()
@@ -151,7 +151,7 @@ def extract_terms(
     project: str,
     only_collections: list[str] | None = None,
     skip_collections: list[str] | None = None,
-    field_mappings: dict[str, dict[str, Any]] | None = None,
+    field_mappings: dict[str, FieldMappingConfig] | None = None,
 ) -> set[Term]:
     """Extract terms from a local directory of JSON CV files."""
     result: set[Term] = set()
@@ -251,7 +251,7 @@ def extract_terms_esgvoc_format(
 
 def extract_terms_emd(
     repo_directory: Path,
-    field_mappings: dict[str, dict[str, Any]],
+    field_mappings: dict[str, FieldMappingConfig],
 ) -> set[Term]:
     """Extract field-level terms from EMD src-data format.
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from models import Term
+from models import MultiStepConfig, Term, TermOverrideConfig
 
 CONTEXT_FILENAME = "000_context.jsonld"
 
@@ -101,7 +101,7 @@ def _build_project_link(descriptor: str, term_id: str) -> dict:
 def _handle_multi_step_term(
     term: Term,
     term_id: str,
-    cfg: dict[str, Any],
+    cfg: MultiStepConfig,
     universe_repo: Path,
     project_repos: list[Path],
     report: GenerationReport,
@@ -173,8 +173,8 @@ def generate_missing_terms(
     project_repos: list[Path],
     universe_type_overrides: dict[str, str] | None = None,
     generation_defaults: dict[str, dict[str, Any]] | None = None,
-    term_overrides: dict[str, dict[str, dict[str, Any]]] | None = None,
-    multi_step_terms: dict[str, dict[str, Any]] | None = None,
+    term_overrides: dict[str, dict[str, TermOverrideConfig]] | None = None,
+    multi_step_terms: dict[str, MultiStepConfig] | None = None,
     source_prefill: dict[str, dict[str, str]] | None = None,
     source_term_data: dict[str, dict[str, dict]] | None = None,
 ) -> GenerationReport:
