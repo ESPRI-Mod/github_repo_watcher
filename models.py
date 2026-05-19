@@ -63,6 +63,7 @@ class CheckConfig:
     exclude_terms: dict[str, list[str]] | None = None
     universe_type_mappings: dict[str, str] | None = None
     generation_defaults: dict[str, dict[str, Any]] | None = None
+    term_id_transforms: dict[str, list[dict[str, str]]] | None = None
 
 
 @dataclass

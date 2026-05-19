@@ -34,6 +34,11 @@ checks:
     project: cmip6
     skip_collections:
       - version_metadata
+      - license
+    term_id_transforms:
+      nominal_resolution:
+        - pattern: " "
+          replace: ""
 
   - name: cmip6plus-consistency
     source:

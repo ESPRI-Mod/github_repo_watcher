@@ -11,6 +11,23 @@ import sys
 from models import ConsistencyResult, Term
 
 
+def apply_term_id_transforms(terms: set[Term], transforms: dict[str, list[dict[str, str]]]) -> set[Term]:
+    """Apply string replacements to term names for specified collections.
+
+    transforms maps collection -> list of {pattern, replace} dicts.
+    """
+    result: set[Term] = set()
+    for t in terms:
+        if t.collection in transforms:
+            name = t.name
+            for rule in transforms[t.collection]:
+                name = name.replace(rule["pattern"], rule["replace"])
+            result.add(Term(name=name, collection=t.collection, field=t.field, value=t.value))
+        else:
+            result.add(t)
+    return result
+
+
 def _apply_exclusions(terms: set[Term], exclude_terms: dict[str, list[str]]) -> set[Term]:
     """Remove terms whose name matches any regex pattern for their collection."""
     compiled: dict[str, list[re.Pattern]] = {

@@ -15,7 +15,7 @@ import yaml
 
 import esgvoc.api as ev
 
-from comparison import compare_terms
+from comparison import apply_term_id_transforms, compare_terms
 from generation import generate_missing_terms, write_report
 from models import CheckConfig, ProjectResult, ReportMode
 from sources import EsgvocRegistrySource, GitRepoEmdSource, GitRepoEsgvocFormatSource, GitRepoSource, TermSource
@@ -71,6 +71,9 @@ def _run_check(check: CheckConfig, mode: ReportMode = ReportMode.missing_in_ref)
         field_mappings=check.field_mappings,
     )
     typer.echo(f"  -> {len(source_terms)} terms")
+
+    if check.term_id_transforms:
+        source_terms = apply_term_id_transforms(source_terms, check.term_id_transforms)
 
     typer.echo(f"Fetching terms from {ref.label()}...")
     ref_terms = ref.get_terms(
@@ -174,6 +177,9 @@ def project(
         )
         typer.echo(f"  -> {len(source_terms)} terms")
 
+        if chk.term_id_transforms:
+            source_terms = apply_term_id_transforms(source_terms, chk.term_id_transforms)
+
         typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
         ref_terms = ref.get_terms(
             project=chk.project,
@@ -217,10 +223,11 @@ def generate_missing(
         typer.echo(f"No checks for project '{project_name}'. Available: {', '.join(available)}", err=True)
         raise typer.Exit(code=1)
 
-    # Merge all exclude_terms patterns across checks
+    # Merge all config options across checks
     merged_excludes: dict[str, list[str]] = {}
     merged_universe_type_mappings: dict[str, str] = {}
     merged_generation_defaults: dict[str, dict[str, Any]] = {}
+    merged_term_id_transforms: dict[str, list[dict[str, str]]] = {}
     for chk in matching:
         if chk.exclude_terms:
             for col, patterns in chk.exclude_terms.items():
@@ -230,6 +237,9 @@ def generate_missing(
         if chk.generation_defaults:
             for col, defaults in chk.generation_defaults.items():
                 merged_generation_defaults.setdefault(col, {}).update(defaults)
+        if chk.term_id_transforms:
+            for col, rules in chk.term_id_transforms.items():
+                merged_term_id_transforms.setdefault(col, []).extend(rules)
 
     # Collect all terms missing from the reference across all checks
     all_missing: set = set()
@@ -245,6 +255,9 @@ def generate_missing(
             skip_collections=chk.skip_collections,
             field_mappings=chk.field_mappings,
         )
+
+        if chk.term_id_transforms:
+            source_terms = apply_term_id_transforms(source_terms, chk.term_id_transforms)
 
         repo_path = source.repo_path()
         if repo_path is not None:
