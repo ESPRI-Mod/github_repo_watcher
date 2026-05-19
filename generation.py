@@ -9,6 +9,7 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from models import Term
 
@@ -49,30 +50,36 @@ def detect_collection_mapping(project_repo: Path) -> dict[str, str]:
     return mapping
 
 
+def _sample_existing_term(descriptor_dir: Path) -> dict | None:
+    """Read the first existing term JSON in a universe descriptor directory."""
+    for f in sorted(descriptor_dir.iterdir()):
+        if f.name == CONTEXT_FILENAME or not f.suffix == ".json":
+            continue
+        try:
+            return json.loads(f.read_text())
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def _build_universe_skeleton(universe_repo: Path, descriptor: str, term_id: str) -> dict:
-    """Build a skeleton universe term JSON by parsing the context file for field discovery."""
+    """Build a skeleton universe term JSON by sampling an existing term for field discovery."""
     result: dict = {
         "@context": CONTEXT_FILENAME,
         "id": term_id,
         "type": descriptor,
     }
-    context_file = universe_repo / descriptor / CONTEXT_FILENAME
-    if not context_file.exists():
+    descriptor_dir = universe_repo / descriptor
+
+    # Sample an existing term to discover fields and their default types
+    sample = _sample_existing_term(descriptor_dir)
+    if sample is None:
         return result
 
-    try:
-        data = json.loads(context_file.read_text())
-    except json.JSONDecodeError:
-        return result
-
-    context = data.get("@context", {})
-    for key, value in context.items():
-        if key in _JSONLD_STRUCTURAL_KEYS:
-            continue
+    for key, value in sample.items():
         if key in result:
             continue
-        # Reference fields (with @type: @id) default to empty list
-        if isinstance(value, dict) and value.get("@type") == "@id":
+        if isinstance(value, list):
             result[key] = []
         elif key in _STRING_DEFAULT_FIELDS:
             result[key] = ""
@@ -95,6 +102,8 @@ def generate_missing_terms(
     missing_terms: set[Term],
     universe_repo: Path,
     project_repo: Path,
+    universe_type_overrides: dict[str, str] | None = None,
+    generation_defaults: dict[str, dict[str, Any]] | None = None,
 ) -> GenerationReport:
     """Plan the generation of JSON files for missing terms in both repos.
 
@@ -106,6 +115,8 @@ def generate_missing_terms(
     Returns a report of what would be created.
     """
     mapping = detect_collection_mapping(project_repo)
+    if universe_type_overrides:
+        mapping.update(universe_type_overrides)
     report = GenerationReport()
 
     # Collect known field values from field-level terms (e.g. EMD provides drs_name, description).
@@ -126,12 +137,6 @@ def generate_missing_terms(
             report.skipped.append((term.collection, term.name, f"no mapping for collection '{term.collection}'"))
             continue
 
-        # Check project collection directory exists
-        project_collection_dir = project_repo / term.collection
-        if not project_collection_dir.is_dir():
-            report.skipped.append((term.collection, term.name, f"collection dir '{term.collection}' not found in project repo"))
-            continue
-
         # Check universe
         universe_term_file = universe_repo / descriptor / f"{term.name}.json"
         if universe_term_file.exists():
@@ -147,11 +152,19 @@ def generate_missing_terms(
             for field_name, value in field_values.items():
                 if field_name in skeleton:
                     skeleton[field_name] = value
+            # Apply generation defaults for fields still null/empty
+            if generation_defaults and term.collection in generation_defaults:
+                for field_name, default_value in generation_defaults[term.collection].items():
+                    if field_name in skeleton and skeleton[field_name] is None:
+                        skeleton[field_name] = default_value
             report.universe_to_create.append((descriptor, term.name, skeleton))
 
-        # Project link
+        # Project link (only if collection directory exists in project repo)
+        project_collection_dir = project_repo / term.collection
+        if not project_collection_dir.is_dir():
+            continue
         link = _build_project_link(descriptor, term.name)
-        project_term_file = project_repo / term.collection / f"{term.name}.json"
+        project_term_file = project_collection_dir / f"{term.name}.json"
         if project_term_file.exists():
             report.project_existed.append((term.collection, term.name))
         else:

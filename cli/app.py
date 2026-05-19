@@ -8,10 +8,12 @@ warnings.filterwarnings("ignore", message="Config key.*is set in model_config bu
 warnings.filterwarnings("ignore", message="EMD Conformance:", category=UserWarning, module="pydantic")
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 import typer
 import yaml
+
+import esgvoc.api as ev
 
 from comparison import compare_terms
 from generation import generate_missing_terms, write_report
@@ -22,6 +24,19 @@ app = typer.Typer(
     name="repo-watcher",
     help="Check consistency between git CV repos and the esgvoc registry.",
 )
+
+
+def _detect_collection_types_from_registry(project: str) -> dict[str, str]:
+    """Query esgvoc registry to build collection->universe_type mapping.
+
+    Samples the first term in each collection and reads its type.
+    """
+    mapping: dict[str, str] = {}
+    for col in ev.get_all_collections_in_project(project):
+        terms = list(ev.get_all_terms_in_collection(project, col))
+        if terms:
+            mapping[col] = terms[0].type
+    return mapping
 
 
 def _source_label(cfg: dict) -> str:
@@ -186,7 +201,6 @@ def project(
 def generate_missing(
     project_name: Annotated[str, typer.Argument(help="Project id (e.g. cmip7).")],
     universe_repo: Annotated[Path, typer.Option(help="Path to local WCRP-universe repo.")] = Path("../WCRP-universe"),
-    project_repo: Annotated[Path, typer.Option(help="Path to local project repo.")] = Path("../CMIP7_CVs"),
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
     collections: Annotated[Optional[list[str]], typer.Option(help="Only generate for these collections.")] = None,
     write: Annotated[bool, typer.Option("--write", help="Actually write the files (default is dry-run).")] = False,
@@ -194,9 +208,6 @@ def generate_missing(
     """Show what term files would need to be created in universe and project repos."""
     if not universe_repo.is_dir():
         typer.echo(f"Universe repo not found: {universe_repo}", err=True)
-        raise typer.Exit(code=1)
-    if not project_repo.is_dir():
-        typer.echo(f"Project repo not found: {project_repo}", err=True)
         raise typer.Exit(code=1)
 
     checks = _load_checks(config)
@@ -208,13 +219,21 @@ def generate_missing(
 
     # Merge all exclude_terms patterns across checks
     merged_excludes: dict[str, list[str]] = {}
+    merged_universe_type_mappings: dict[str, str] = {}
+    merged_generation_defaults: dict[str, dict[str, Any]] = {}
     for chk in matching:
         if chk.exclude_terms:
             for col, patterns in chk.exclude_terms.items():
                 merged_excludes.setdefault(col, []).extend(patterns)
+        if chk.universe_type_mappings:
+            merged_universe_type_mappings.update(chk.universe_type_mappings)
+        if chk.generation_defaults:
+            for col, defaults in chk.generation_defaults.items():
+                merged_generation_defaults.setdefault(col, {}).update(defaults)
 
     # Collect all terms missing from the reference across all checks
     all_missing: set = set()
+    source_repo_paths: list[Path] = []
     for chk in matching:
         source = _build_source(chk.source)
         ref = _build_source(chk.reference)
@@ -226,6 +245,10 @@ def generate_missing(
             skip_collections=chk.skip_collections,
             field_mappings=chk.field_mappings,
         )
+
+        repo_path = source.repo_path()
+        if repo_path is not None:
+            source_repo_paths.append(repo_path)
 
         typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
         ref_terms = ref.get_terms(
@@ -245,6 +268,39 @@ def generate_missing(
         )
         all_missing |= result.in_source_not_reference
 
+    # Build collection->universe_type mapping.
+    # Priority: 1) 000_context.jsonld from source repos  2) esgvoc registry  3) config overrides
+    from generation import detect_collection_mapping
+
+    type_mapping: dict[str, str] = {}
+
+    # 1) esgvoc registry as baseline
+    typer.echo(f"Detecting collection types from esgvoc/{project_name}...")
+    type_mapping.update(_detect_collection_types_from_registry(project_name))
+
+    # 2) 000_context.jsonld from source repos (overrides registry — this is the project truth)
+    for repo_path in source_repo_paths:
+        context_mapping = detect_collection_mapping(repo_path)
+        if context_mapping:
+            type_mapping.update(context_mapping)
+
+    # 3) Config overrides (last resort for exceptional cases)
+    type_mapping.update(merged_universe_type_mappings)
+
+    # Use the first esgvoc-format source repo (has context files) for project links,
+    # fall back to any available source repo
+    project_repo_path: Path | None = None
+    for repo_path in source_repo_paths:
+        if detect_collection_mapping(repo_path):
+            project_repo_path = repo_path
+            break
+    if project_repo_path is None and source_repo_paths:
+        project_repo_path = source_repo_paths[0]
+
+    if project_repo_path is None:
+        typer.echo("No source repo path available for generation.", err=True)
+        raise typer.Exit(code=1)
+
     if merged_excludes:
         from comparison import _apply_exclusions
         all_missing = _apply_exclusions(all_missing, merged_excludes)
@@ -259,14 +315,16 @@ def generate_missing(
     report = generate_missing_terms(
         missing_terms=all_missing,
         universe_repo=universe_repo,
-        project_repo=project_repo,
+        project_repo=project_repo_path,
+        universe_type_overrides=type_mapping or None,
+        generation_defaults=merged_generation_defaults or None,
     )
 
     typer.echo()
     typer.echo(report.format_report())
 
     if write:
-        write_report(report, universe_repo, project_repo)
+        write_report(report, universe_repo, project_repo_path)
         n = len(report.universe_to_create) + len(report.project_to_create)
         typer.echo(f"\n{n} file(s) written. Review the generated skeletons and fill in placeholder values.")
 

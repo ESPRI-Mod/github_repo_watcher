@@ -36,6 +36,10 @@ class TermSource(ABC):
         """Human-readable label for reports."""
         ...
 
+    def repo_path(self) -> Path | None:
+        """Return the local path of the cloned repo, if available."""
+        return None
+
 
 class GitRepoSource(TermSource):
     """Clone a repo at a given branch, extract terms from JSON CVs."""
@@ -44,6 +48,7 @@ class GitRepoSource(TermSource):
         self.owner = owner
         self.repo = repo
         self.branch = branch
+        self._dest: Path | None = None
 
     def get_terms(
         self,
@@ -65,6 +70,9 @@ class GitRepoSource(TermSource):
     def label(self) -> str:
         return f"{self.owner}/{self.repo}@{self.branch}"
 
+    def repo_path(self) -> Path | None:
+        return self._dest
+
     def _clone(self) -> Path:
         url = f"https://github.com/{self.owner}/{self.repo}.git"
         git_repo = GitRepository(url=url, branch=self.branch)
@@ -73,6 +81,7 @@ class GitRepoSource(TermSource):
         if dest.is_dir():
             shutil.rmtree(dest)
         run_coro_as_sync(git_repo.pull_code())
+        self._dest = dest
         return dest
 
 
@@ -83,6 +92,7 @@ class GitRepoEsgvocFormatSource(TermSource):
         self.owner = owner
         self.repo = repo
         self.branch = branch
+        self._dest: Path | None = None
 
     def get_terms(
         self,
@@ -101,6 +111,9 @@ class GitRepoEsgvocFormatSource(TermSource):
     def label(self) -> str:
         return f"{self.owner}/{self.repo}@{self.branch}"
 
+    def repo_path(self) -> Path | None:
+        return self._dest
+
     def _clone(self) -> Path:
         url = f"https://github.com/{self.owner}/{self.repo}.git"
         git_repo = GitRepository(url=url, branch=self.branch)
@@ -109,6 +122,7 @@ class GitRepoEsgvocFormatSource(TermSource):
         if dest.is_dir():
             shutil.rmtree(dest)
         run_coro_as_sync(git_repo.pull_code())
+        self._dest = dest
         return dest
 
 
@@ -119,6 +133,7 @@ class GitRepoEmdSource(TermSource):
         self.owner = owner
         self.repo = repo
         self.branch = branch
+        self._dest: Path | None = None
 
     def get_terms(
         self,
@@ -139,6 +154,9 @@ class GitRepoEmdSource(TermSource):
     def label(self) -> str:
         return f"{self.owner}/{self.repo}@{self.branch}"
 
+    def repo_path(self) -> Path | None:
+        return self._dest
+
     def _clone(self) -> Path:
         url = f"https://github.com/{self.owner}/{self.repo}.git"
         git_repo = GitRepository(url=url, branch=self.branch)
@@ -147,6 +165,7 @@ class GitRepoEmdSource(TermSource):
         if dest.is_dir():
             shutil.rmtree(dest)
         run_coro_as_sync(git_repo.pull_code())
+        self._dest = dest
         return dest
 
 

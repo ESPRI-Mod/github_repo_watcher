@@ -15,8 +15,12 @@ checks:
     project: cordex-cmip6
     skip_collections:
       - driving_variant_label
+      - project_id
     collection_mappings:
       table_id: frequency
+    universe_type_mappings:
+      source_id: source
+      version_realization: variant_label
 
   - name: cmip6-consistency
     source:
@@ -119,3 +123,6 @@ checks:
         fields:
           validation_key: drs_name
           description: description
+    generation_defaults:
+      grid_label:
+        region: "global"
