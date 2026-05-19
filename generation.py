@@ -98,6 +98,75 @@ def _build_project_link(descriptor: str, term_id: str) -> dict:
     }
 
 
+def _handle_multi_step_term(
+    term: Term,
+    term_id: str,
+    cfg: dict[str, Any],
+    universe_repo: Path,
+    project_repos: list[Path],
+    report: GenerationReport,
+    seen_members: set[tuple[str, str]],
+) -> None:
+    """Expand a term into member + group + project link artifacts.
+
+    For example, institution_id "IUM-FDU" with separator "-" produces:
+    - institution/ium.json + institution/fdu.json (members)
+    - organisation/ium-fdu.json with members: ["ium", "fdu"] (group)
+    - institution_id/ium-fdu.json project link -> organisation
+    """
+    separator = cfg.get("separator")
+    member_descriptor = cfg["member_descriptor"]
+    group_descriptor = cfg["group_descriptor"]
+
+    # Split into atomic members
+    if separator:
+        members = [m.lower() for m in term_id.split(separator)]
+    else:
+        members = [term_id]
+
+    # Step 1: member_descriptor — one file per atomic member
+    member_dir = universe_repo / member_descriptor
+    if member_dir.is_dir():
+        for member_id in members:
+            key = (member_descriptor, member_id)
+            if key in seen_members:
+                continue
+            seen_members.add(key)
+            member_file = member_dir / f"{member_id}.json"
+            if member_file.exists():
+                report.universe_existed.append(key)
+            else:
+                skeleton = _build_universe_skeleton(universe_repo, member_descriptor, member_id)
+                report.universe_to_create.append((member_descriptor, member_id, skeleton))
+
+    # Step 2: group_descriptor — one file for the full term
+    group_dir = universe_repo / group_descriptor
+    if group_dir.is_dir():
+        group_file = group_dir / f"{term_id}.json"
+        if group_file.exists():
+            report.universe_existed.append((group_descriptor, term_id))
+        else:
+            skeleton = _build_universe_skeleton(universe_repo, group_descriptor, term_id)
+            skeleton["members"] = members
+            report.universe_to_create.append((group_descriptor, term_id, skeleton))
+
+    # Step 3: project link -> group_descriptor
+    found_in_project = False
+    has_collection_dir = False
+    for repo in project_repos:
+        collection_dir = repo / term.collection
+        if not collection_dir.is_dir():
+            continue
+        has_collection_dir = True
+        if (collection_dir / f"{term_id}.json").exists():
+            report.project_existed.append((term.collection, term_id))
+            found_in_project = True
+            break
+    if not found_in_project and has_collection_dir:
+        link = _build_project_link(group_descriptor, term_id)
+        report.project_to_create.append((term.collection, term_id, link))
+
+
 def generate_missing_terms(
     missing_terms: set[Term],
     universe_repo: Path,
@@ -105,6 +174,9 @@ def generate_missing_terms(
     universe_type_overrides: dict[str, str] | None = None,
     generation_defaults: dict[str, dict[str, Any]] | None = None,
     term_overrides: dict[str, dict[str, dict[str, Any]]] | None = None,
+    multi_step_terms: dict[str, dict[str, Any]] | None = None,
+    source_prefill: dict[str, dict[str, str]] | None = None,
+    source_term_data: dict[str, dict[str, dict]] | None = None,
 ) -> GenerationReport:
     """Plan the generation of JSON files for missing terms in both repos.
 
@@ -135,6 +207,8 @@ def generate_missing_terms(
         if term.field and term.value is not None:
             known_values.setdefault(key, {})[term.field] = term.value
 
+    seen_members: set[tuple[str, str]] = set()
+
     for term in unique_terms.values():
         # Resolve universe descriptor
         descriptor = mapping.get(term.collection)
@@ -146,12 +220,25 @@ def generate_missing_terms(
         term_id = term.name.lower()
 
         # Check for term overrides (e.g. tracking_id: reuse universe "prefuuid"
-        # with project-specific regex)
+        # with project-specific regex, or variant_label with a config-defined ID)
         collection_overrides = term_overrides.get(term.collection) if term_overrides else None
         if collection_overrides and term.name in collection_overrides:
             override_cfg = collection_overrides[term.name]
             override_id = override_cfg["universe_term"]
             override_fields = override_cfg.get("fields", {})
+
+            # Create universe term if requested and missing
+            if override_cfg.get("create_universe"):
+                universe_file = universe_repo / descriptor / f"{override_id}.json"
+                if universe_file.exists():
+                    report.universe_existed.append((descriptor, override_id))
+                else:
+                    universe_dir = universe_repo / descriptor
+                    if universe_dir.is_dir():
+                        skeleton = _build_universe_skeleton(universe_repo, descriptor, override_id)
+                        skeleton.update(override_fields)
+                        report.universe_to_create.append((descriptor, override_id, skeleton))
+
             # Build a project-level override (universe term + field overrides)
             override_json = {
                 "@context": CONTEXT_FILENAME,
@@ -174,6 +261,12 @@ def generate_missing_terms(
                         break
             continue
 
+        # Check for multi-step terms (e.g. institution_id: institution + organisation + project link)
+        multi_step_cfg = multi_step_terms.get(term.collection) if multi_step_terms else None
+        if multi_step_cfg is not None:
+            _handle_multi_step_term(term, term_id, multi_step_cfg, universe_repo, project_repos, report, seen_members)
+            continue
+
         # Check universe
         universe_term_file = universe_repo / descriptor / f"{term_id}.json"
         if universe_term_file.exists():
@@ -189,6 +282,13 @@ def generate_missing_terms(
             for field_name, value in field_values.items():
                 if field_name in skeleton:
                     skeleton[field_name] = value
+            # Pre-populate from source community CV data (e.g. label, release_year)
+            if source_prefill and source_term_data and term.collection in source_prefill:
+                field_map = source_prefill[term.collection]
+                cv_data = source_term_data.get(term.collection, {}).get(term.name, {})
+                for src_field, target_field in field_map.items():
+                    if src_field in cv_data and target_field in skeleton:
+                        skeleton[target_field] = cv_data[src_field]
             # Apply generation defaults for fields still null/empty
             if generation_defaults and term.collection in generation_defaults:
                 for field_name, default_value in generation_defaults[term.collection].items():

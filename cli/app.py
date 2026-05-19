@@ -232,6 +232,8 @@ def generate_missing(
     merged_generation_defaults: dict[str, dict[str, Any]] = {}
     merged_term_id_transforms: dict[str, list[dict[str, str]]] = {}
     merged_term_overrides: dict[str, dict[str, dict[str, Any]]] = {}
+    merged_multi_step_terms: dict[str, dict[str, Any]] = {}
+    merged_source_prefill: dict[str, dict[str, str]] = {}
     for chk in matching:
         if chk.exclude_terms:
             for col, patterns in chk.exclude_terms.items():
@@ -247,10 +249,15 @@ def generate_missing(
         if chk.term_overrides:
             for col, overrides in chk.term_overrides.items():
                 merged_term_overrides.setdefault(col, {}).update(overrides)
+        if chk.multi_step_terms:
+            merged_multi_step_terms.update(chk.multi_step_terms)
+        if chk.source_prefill:
+            merged_source_prefill.update(chk.source_prefill)
 
     # Collect all terms missing from the reference across all checks
     all_missing: set = set()
     source_repo_paths: list[Path] = []
+    source_check_repos: list[tuple[CheckConfig, Path]] = []
     for chk in matching:
         source = _build_source(chk.source)
         ref = _build_source(chk.reference)
@@ -269,6 +276,7 @@ def generate_missing(
         repo_path = source.repo_path()
         if repo_path is not None:
             source_repo_paths.append(repo_path)
+            source_check_repos.append((chk, repo_path))
 
         typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
         ref_terms = ref.get_terms(
@@ -327,8 +335,21 @@ def generate_missing(
         all_missing = {t for t in all_missing if t.collection in collections}
 
     if not all_missing:
-        typer.echo("No missing terms found.")
+        typer.echo(typer.style("Nothing to generate — all terms are up to date.", fg=typer.colors.GREEN))
         raise typer.Exit()
+
+    # Extract source term data for prefill (re-read community CV for field values)
+    source_term_data: dict[str, dict[str, dict]] = {}
+    if merged_source_prefill:
+        from extraction import extract_term_data
+        prefill_collections = list(merged_source_prefill.keys())
+        for chk, repo_path in source_check_repos:
+            if chk.source.get("type") != "git":
+                continue
+            cv_dir = repo_path / "CVs" if chk.project == "input4mip" else repo_path
+            data = extract_term_data(cv_dir, chk.project, collections=prefill_collections)
+            for col, terms in data.items():
+                source_term_data.setdefault(col, {}).update(terms)
 
     report = generate_missing_terms(
         missing_terms=all_missing,
@@ -337,6 +358,9 @@ def generate_missing(
         universe_type_overrides=type_mapping or None,
         generation_defaults=merged_generation_defaults or None,
         term_overrides=merged_term_overrides or None,
+        multi_step_terms=merged_multi_step_terms or None,
+        source_prefill=merged_source_prefill or None,
+        source_term_data=source_term_data or None,
     )
 
     typer.echo()

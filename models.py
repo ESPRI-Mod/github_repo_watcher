@@ -65,6 +65,8 @@ class CheckConfig:
     generation_defaults: dict[str, dict[str, Any]] | None = None
     term_id_transforms: dict[str, list[dict[str, str]]] | None = None
     term_overrides: dict[str, dict[str, dict[str, Any]]] | None = None
+    multi_step_terms: dict[str, dict[str, Any]] | None = None
+    source_prefill: dict[str, dict[str, str]] | None = None
 
 
 @dataclass
