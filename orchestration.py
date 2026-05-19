@@ -13,43 +13,7 @@ from prefect.variables import Variable
 
 from comparison import compare_terms
 from models import CheckConfig, ConsistencyResult
-from sources import (
-    EsgvocRegistrySource,
-    GitRepoEmdSource,
-    GitRepoEsgvocFormatSource,
-    GitRepoSource,
-    TermSource,
-)
-
-
-def build_source(source_config: dict) -> TermSource:
-    """Factory: config dict -> TermSource instance."""
-    source_type = source_config["type"]
-    if source_type == "git":
-        return GitRepoSource(
-            owner=source_config["owner"],
-            repo=source_config["repo"],
-            branch=source_config["branch"],
-        )
-    if source_type == "git_esgvoc_format":
-        return GitRepoEsgvocFormatSource(
-            owner=source_config["owner"],
-            repo=source_config["repo"],
-            branch=source_config["branch"],
-        )
-    if source_type == "git_emd":
-        return GitRepoEmdSource(
-            owner=source_config["owner"],
-            repo=source_config["repo"],
-            branch=source_config["branch"],
-        )
-    if source_type == "registry":
-        return EsgvocRegistrySource(
-            project=source_config["project"],
-            version=source_config.get("version"),
-        )
-    msg = f"Unknown source type: {source_type}"
-    raise ValueError(msg)
+from sources import TermSource, build_source
 
 
 @task(retries=3, retry_delay_seconds=[30, 60, 120], log_prints=True)

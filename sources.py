@@ -9,6 +9,7 @@ from __future__ import annotations
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
+
 import esgvoc.api as ev
 from prefect.runner.storage import GitRepository
 from prefect.utilities.asyncutils import run_coro_as_sync
@@ -39,6 +40,18 @@ class TermSource(ABC):
         return None
 
 
+def _clone_repo(owner: str, repo: str, branch: str) -> Path:
+    """Clone a GitHub repo to /tmp and return the local path."""
+    url = f"https://github.com/{owner}/{repo}.git"
+    git_repo = GitRepository(url=url, branch=branch)
+    git_repo.set_base_path(Path("/tmp"))
+    dest = git_repo.destination
+    if dest.is_dir():
+        shutil.rmtree(dest)
+    run_coro_as_sync(git_repo.pull_code())
+    return dest
+
+
 class GitRepoSource(TermSource):
     """Clone a repo at a given branch, extract terms from JSON CVs."""
 
@@ -55,8 +68,8 @@ class GitRepoSource(TermSource):
         skip_collections: list[str] | None = None,
         field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
-        repo_dir = self._clone()
-        cv_dir = repo_dir / "CVs" if project == "input4mip" else repo_dir
+        self._dest = _clone_repo(self.owner, self.repo, self.branch)
+        cv_dir = self._dest / "CVs" if project == "input4mip" else self._dest
         return extract_terms(
             cv_directory=cv_dir,
             project=project,
@@ -70,17 +83,6 @@ class GitRepoSource(TermSource):
 
     def repo_path(self) -> Path | None:
         return self._dest
-
-    def _clone(self) -> Path:
-        url = f"https://github.com/{self.owner}/{self.repo}.git"
-        git_repo = GitRepository(url=url, branch=self.branch)
-        git_repo._storage_base_path = Path("/tmp")  # noqa: SLF001
-        dest = git_repo.destination
-        if dest.is_dir():
-            shutil.rmtree(dest)
-        run_coro_as_sync(git_repo.pull_code())
-        self._dest = dest
-        return dest
 
 
 class GitRepoEsgvocFormatSource(TermSource):
@@ -99,9 +101,9 @@ class GitRepoEsgvocFormatSource(TermSource):
         skip_collections: list[str] | None = None,
         field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
-        repo_dir = self._clone()
+        self._dest = _clone_repo(self.owner, self.repo, self.branch)
         return extract_terms_esgvoc_format(
-            repo_directory=repo_dir,
+            repo_directory=self._dest,
             only_collections=only_collections,
             skip_collections=skip_collections,
         )
@@ -111,17 +113,6 @@ class GitRepoEsgvocFormatSource(TermSource):
 
     def repo_path(self) -> Path | None:
         return self._dest
-
-    def _clone(self) -> Path:
-        url = f"https://github.com/{self.owner}/{self.repo}.git"
-        git_repo = GitRepository(url=url, branch=self.branch)
-        git_repo._storage_base_path = Path("/tmp")  # noqa: SLF001
-        dest = git_repo.destination
-        if dest.is_dir():
-            shutil.rmtree(dest)
-        run_coro_as_sync(git_repo.pull_code())
-        self._dest = dest
-        return dest
 
 
 class GitRepoEmdSource(TermSource):
@@ -143,9 +134,9 @@ class GitRepoEmdSource(TermSource):
         if not field_mappings:
             msg = "GitRepoEmdSource requires field_mappings"
             raise ValueError(msg)
-        repo_dir = self._clone()
+        self._dest = _clone_repo(self.owner, self.repo, self.branch)
         return extract_terms_emd(
-            repo_directory=repo_dir,
+            repo_directory=self._dest,
             field_mappings=field_mappings,
         )
 
@@ -154,17 +145,6 @@ class GitRepoEmdSource(TermSource):
 
     def repo_path(self) -> Path | None:
         return self._dest
-
-    def _clone(self) -> Path:
-        url = f"https://github.com/{self.owner}/{self.repo}.git"
-        git_repo = GitRepository(url=url, branch=self.branch)
-        git_repo._storage_base_path = Path("/tmp")  # noqa: SLF001
-        dest = git_repo.destination
-        if dest.is_dir():
-            shutil.rmtree(dest)
-        run_coro_as_sync(git_repo.pull_code())
-        self._dest = dest
-        return dest
 
 
 class EsgvocRegistrySource(TermSource):
@@ -226,3 +206,18 @@ class EsgvocRegistrySource(TermSource):
     def label(self) -> str:
         v = self.version or "latest"
         return f"esgvoc/{self.project}@{v}"
+
+
+def build_source(source_config: dict) -> TermSource:
+    """Factory: config dict -> TermSource instance."""
+    source_type = source_config["type"]
+    if source_type == "git":
+        return GitRepoSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
+    if source_type == "git_esgvoc_format":
+        return GitRepoEsgvocFormatSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
+    if source_type == "git_emd":
+        return GitRepoEmdSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
+    if source_type == "registry":
+        return EsgvocRegistrySource(project=source_config["project"], version=source_config.get("version"))
+    msg = f"Unknown source type: {source_type}"
+    raise ValueError(msg)

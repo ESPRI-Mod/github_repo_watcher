@@ -5,12 +5,16 @@ Pure parsing. No network, no esgvoc, no Prefect.
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from pydantic import TypeAdapter
 
 from models import FieldMappingConfig, Term
+
+logger = logging.getLogger(__name__)
 
 # Type aliases
 type ParamStr = str
@@ -221,8 +225,6 @@ def extract_terms_esgvoc_format(
     Used for CMIP7-CVs and similar repos where each collection is a subdirectory
     and each term is a separate JSON file with an "@id" or "id" field.
     """
-    import json
-
     result: set[Term] = set()
 
     for collection_dir in sorted(repo_directory.iterdir()):
@@ -240,8 +242,7 @@ def extract_terms_esgvoc_format(
             try:
                 data = json.loads(term_file.read_text())
             except json.JSONDecodeError:
-                import sys
-                print(f"Warning: skipping malformed JSON: {term_file}", file=sys.stderr)
+                logger.warning("Skipping malformed JSON: %s", term_file)
                 continue
             term_id = data.get("@id") or data.get("id") or term_file.stem
             result.add(Term(name=term_id, collection=collection))
@@ -262,8 +263,6 @@ def extract_terms_emd(
         {"model": {"target_collection": "source",
                    "fields": {"validation_key": "drs_name", "description": "description"}}}
     """
-    import json
-
     result: set[Term] = set()
 
     for source_collection, mapping in field_mappings.items():
@@ -278,8 +277,7 @@ def extract_terms_emd(
             try:
                 data = json.loads(term_file.read_text())
             except json.JSONDecodeError:
-                import sys
-                print(f"Warning: skipping malformed JSON: {term_file}", file=sys.stderr)
+                logger.warning("Skipping malformed JSON: %s", term_file)
                 continue
             raw_id = data.get("@id") or data.get("id") or term_file.stem
             term_id = raw_id.replace("-", "_")

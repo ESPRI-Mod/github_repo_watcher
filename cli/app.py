@@ -18,7 +18,7 @@ import esgvoc.api as ev
 from comparison import apply_term_id_transforms, compare_terms
 from generation import generate_missing_terms, write_report
 from models import CheckConfig, MultiStepConfig, ProjectResult, ReportMode, TermIdTransform, TermOverrideConfig
-from sources import EsgvocRegistrySource, GitRepoEmdSource, GitRepoEsgvocFormatSource, GitRepoSource, TermSource
+from sources import build_source
 
 app = typer.Typer(
     name="repo-watcher",
@@ -45,23 +45,9 @@ def _source_label(cfg: dict) -> str:
     return f"esgvoc/{cfg['project']}@{cfg.get('version', 'latest')}"
 
 
-def _build_source(cfg: dict) -> TermSource:
-    source_type = cfg["type"]
-    if source_type == "git":
-        return GitRepoSource(owner=cfg["owner"], repo=cfg["repo"], branch=cfg["branch"])
-    if source_type == "git_esgvoc_format":
-        return GitRepoEsgvocFormatSource(owner=cfg["owner"], repo=cfg["repo"], branch=cfg["branch"])
-    if source_type == "git_emd":
-        return GitRepoEmdSource(owner=cfg["owner"], repo=cfg["repo"], branch=cfg["branch"])
-    if source_type == "registry":
-        return EsgvocRegistrySource(project=cfg["project"], version=cfg.get("version"))
-    msg = f"Unknown source type: {source_type}"
-    raise typer.BadParameter(msg)
-
-
 def _run_check(check: CheckConfig, mode: ReportMode = ReportMode.missing_in_ref) -> None:
-    source = _build_source(check.source)
-    ref = _build_source(check.reference)
+    source = build_source(check.source)
+    ref = build_source(check.reference)
 
     typer.echo(f"Fetching terms from {source.label()}...")
     source_terms = source.get_terms(
@@ -164,8 +150,8 @@ def project(
     proj_result = ProjectResult(project=project_name, reference_label=ref_label)
 
     for chk in matching:
-        source = _build_source(chk.source)
-        ref = _build_source(chk.reference)
+        source = build_source(chk.source)
+        ref = build_source(chk.reference)
         src_label = source.label()
 
         typer.echo(f"[{chk.name}] Fetching {src_label}...")
@@ -259,8 +245,8 @@ def generate_missing(
     source_repo_paths: list[Path] = []
     source_check_repos: list[tuple[CheckConfig, Path]] = []
     for chk in matching:
-        source = _build_source(chk.source)
-        ref = _build_source(chk.reference)
+        source = build_source(chk.source)
+        ref = build_source(chk.reference)
 
         typer.echo(f"[{chk.name}] Fetching {source.label()}...")
         source_terms = source.get_terms(

@@ -5,10 +5,12 @@ Pure set operations. No network, no esgvoc, no Prefect.
 
 from __future__ import annotations
 
+import logging
 import re
-import sys
 
 from models import ConsistencyResult, Term, TermIdTransform
+
+logger = logging.getLogger(__name__)
 
 
 def apply_term_id_transforms(terms: set[Term], transforms: dict[str, list[TermIdTransform]]) -> set[Term]:
@@ -36,7 +38,7 @@ def _apply_exclusions(terms: set[Term], exclude_terms: dict[str, list[str]]) -> 
     }
     for col, patterns in exclude_terms.items():
         for pattern in patterns:
-            print(f"Excluding terms matching /{pattern}/ from collection '{col}'", file=sys.stderr)
+            logger.debug("Excluding terms matching /%s/ from collection '%s'", pattern, col)
     return {
         t for t in terms
         if t.collection not in compiled
