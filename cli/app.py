@@ -242,6 +242,9 @@ def generate_missing(
 
     # Collect all terms missing from the reference across all checks
     all_missing: set = set()
+    # Field values from ALL source terms (not just missing) for checks with field_mappings.
+    # Used to pre-fill generation skeletons even when a field matches the registry.
+    all_source_field_values: dict[tuple[str, str], dict[str, str]] = {}
     source_repo_paths: list[Path] = []
     source_check_repos: list[tuple[CheckConfig, Path]] = []
     for chk in matching:
@@ -255,6 +258,13 @@ def generate_missing(
             skip_collections=chk.skip_collections,
             field_mappings=chk.field_mappings,
         )
+
+        # Capture field values from ALL source terms (for checks with field_mappings)
+        # so generation can pre-fill skeletons even when a field matches the registry.
+        if chk.field_mappings:
+            for t in source_terms:
+                if t.field and t.value is not None:
+                    all_source_field_values.setdefault((t.collection, t.name), {})[t.field] = t.value
 
         if chk.term_id_transforms:
             source_terms = apply_term_id_transforms(source_terms, chk.term_id_transforms)
@@ -347,6 +357,7 @@ def generate_missing(
         multi_step_terms=merged_multi_step_terms or None,
         source_prefill=merged_source_prefill or None,
         source_term_data=source_term_data or None,
+        extra_field_values=all_source_field_values or None,
     )
 
     typer.echo()

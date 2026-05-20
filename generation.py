@@ -86,6 +86,10 @@ def _build_universe_skeleton(universe_repo: Path, descriptor: str, term_id: str)
         else:
             result[key] = None
 
+    # drs_name defaults to term_id (standard esgvoc convention)
+    if "drs_name" in result and not result["drs_name"]:
+        result["drs_name"] = term_id
+
     return result
 
 
@@ -177,6 +181,7 @@ def generate_missing_terms(
     multi_step_terms: dict[str, MultiStepConfig] | None = None,
     source_prefill: dict[str, dict[str, str]] | None = None,
     source_term_data: dict[str, dict[str, dict]] | None = None,
+    extra_field_values: dict[tuple[str, str], dict[str, str]] | None = None,
 ) -> GenerationReport:
     """Plan the generation of JSON files for missing terms in both repos.
 
@@ -198,7 +203,12 @@ def generate_missing_terms(
 
     # Collect known field values from field-level terms (e.g. EMD provides drs_name, description).
     # Also deduplicate: multiple (name, collection, field=X) entries represent the same term.
+    # Start with extra_field_values (all source fields, not just missing) as baseline,
+    # then overlay with values from missing terms (which take priority).
     known_values: dict[tuple[str, str], dict[str, str]] = {}
+    if extra_field_values:
+        for key, fields in extra_field_values.items():
+            known_values.setdefault(key, {}).update(fields)
     unique_terms: dict[tuple[str, str], Term] = {}
     for term in sorted(missing_terms, key=lambda t: (t.collection, t.name)):
         key = (term.collection, term.name)
