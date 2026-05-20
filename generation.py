@@ -326,14 +326,16 @@ def generate_missing_terms(
     return report
 
 
-def write_report(report: GenerationReport, universe_repo: Path, project_repo: Path) -> None:
+def write_report(report: GenerationReport, universe_repo: Path | None = None, project_repo: Path | None = None) -> None:
     """Write the JSON files planned in a GenerationReport to disk."""
-    for descriptor, term_id, skeleton in report.universe_to_create:
-        path = universe_repo / descriptor / f"{term_id}.json"
-        path.write_text(json.dumps(skeleton, indent=2, ensure_ascii=False) + "\n")
-    for collection, term_id, link in report.project_to_create:
-        path = project_repo / collection / f"{term_id}.json"
-        path.write_text(json.dumps(link, indent=4, ensure_ascii=False) + "\n")
+    if universe_repo is not None:
+        for descriptor, term_id, skeleton in report.universe_to_create:
+            path = universe_repo / descriptor / f"{term_id}.json"
+            path.write_text(json.dumps(skeleton, indent=2, ensure_ascii=False) + "\n")
+    if project_repo is not None:
+        for collection, term_id, link in report.project_to_create:
+            path = project_repo / collection / f"{term_id}.json"
+            path.write_text(json.dumps(link, indent=4, ensure_ascii=False) + "\n")
 
 
 @dataclass

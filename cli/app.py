@@ -195,14 +195,18 @@ def generate_missing(
     universe_repo: Annotated[Path, typer.Option(help="Path to local WCRP-universe repo.")] = Path("../WCRP-universe"),
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
     collections: Annotated[Optional[list[str]], typer.Option(help="Only generate for these collections.")] = None,
-    write: Annotated[Optional[Path], typer.Option("--write", help="Write files to this local project repo path.")] = None,
+    write_project: Annotated[Optional[Path], typer.Option("--write-project", help="Write project link files to this local project repo path.")] = None,
+    write_universe: Annotated[Optional[Path], typer.Option("--write-universe", help="Write universe term files to this local universe repo path.")] = None,
 ) -> None:
     """Show what term files would need to be created in universe and project repos."""
     if not universe_repo.is_dir():
         typer.echo(f"Universe repo not found: {universe_repo}", err=True)
         raise typer.Exit(code=1)
-    if write is not None and not write.is_dir():
-        typer.echo(f"Write target not found: {write}", err=True)
+    if write_project is not None and not write_project.is_dir():
+        typer.echo(f"Project write target not found: {write_project}", err=True)
+        raise typer.Exit(code=1)
+    if write_universe is not None and not write_universe.is_dir():
+        typer.echo(f"Universe write target not found: {write_universe}", err=True)
         raise typer.Exit(code=1)
 
     checks = _load_checks(config)
@@ -366,10 +370,19 @@ def generate_missing(
     else:
         typer.echo(report.format_report())
 
-    if write is not None:
-        write_report(report, universe_repo, write)
-        n = len(report.universe_to_create) + len(report.project_to_create)
-        typer.echo(f"\n{n} file(s) written to {write.resolve()}. Review the generated skeletons and fill in placeholder values.")
+    if write_universe is not None or write_project is not None:
+        write_report(
+            report,
+            universe_repo=write_universe,
+            project_repo=write_project,
+        )
+        parts = []
+        if write_universe is not None and report.universe_to_create:
+            parts.append(f"{len(report.universe_to_create)} universe file(s) to {write_universe.resolve()}")
+        if write_project is not None and report.project_to_create:
+            parts.append(f"{len(report.project_to_create)} project file(s) to {write_project.resolve()}")
+        if parts:
+            typer.echo(f"\nWritten: {', '.join(parts)}. Review the generated skeletons and fill in placeholder values.")
 
 
 @app.command()
