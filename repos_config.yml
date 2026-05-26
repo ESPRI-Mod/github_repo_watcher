@@ -36,6 +36,8 @@ checks:
             regex: "^v\\d+-r\\d+$"
             description: "CORDEX version-realization label (e.g. v1-r1)"
     source_prefill:
+      activity_id:
+        _value: description
       source_id:
         source_id: drs_name
         label: label

@@ -209,6 +209,9 @@ def extract_term_data(
             for term_key, term_content in terms.items():
                 if isinstance(term_content, dict):
                     collection_data[term_key] = term_content
+                elif isinstance(term_content, str):
+                    # Wrap plain-string values (e.g. activity_id descriptions)
+                    collection_data[term_key] = {"_value": term_content}
             if collection_data:
                 result[collection_key] = collection_data
 
