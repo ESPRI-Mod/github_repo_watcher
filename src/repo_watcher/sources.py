@@ -11,11 +11,10 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 
 import esgvoc.api as ev
-from prefect.runner.storage import GitRepository
-from prefect.utilities.asyncutils import run_coro_as_sync
+from git import Repo
 
-from extraction import extract_terms, extract_terms_emd, extract_terms_esgvoc_format
-from models import FieldMappingConfig, Term
+from repo_watcher.extraction import extract_terms, extract_terms_emd, extract_terms_esgvoc_format
+from repo_watcher.models import FieldMappingConfig, Term
 
 
 class TermSource(ABC):
@@ -43,12 +42,10 @@ class TermSource(ABC):
 def _clone_repo(owner: str, repo: str, branch: str) -> Path:
     """Clone a GitHub repo to /tmp and return the local path."""
     url = f"https://github.com/{owner}/{repo}.git"
-    git_repo = GitRepository(url=url, branch=branch)
-    git_repo.set_base_path(Path("/tmp"))
-    dest = git_repo.destination
+    dest = Path("/tmp") / f"{repo}-{branch}"
     if dest.is_dir():
         shutil.rmtree(dest)
-    run_coro_as_sync(git_repo.pull_code())
+    Repo.clone_from(url, dest, branch=branch, depth=1)
     return dest
 
 
@@ -161,9 +158,7 @@ class EsgvocRegistrySource(TermSource):
         skip_collections: list[str] | None = None,
         field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
-        collections = ev.get_all_collections_in_project(
-            self.project, version=self.version
-        )
+        collections = ev.get_all_collections_in_project(self.project, version=self.version)
         terms: set[Term] = set()
 
         # Build a set of collections that need field-level extraction
@@ -182,9 +177,7 @@ class EsgvocRegistrySource(TermSource):
             if collection in field_target_collections:
                 # Field-level extraction: produce Term per field/value
                 target_fields = field_target_collections[collection]
-                for term_obj in ev.get_all_terms_in_collection(
-                    self.project, collection, version=self.version
-                ):
+                for term_obj in ev.get_all_terms_in_collection(self.project, collection, version=self.version):
                     for target_field in target_fields.values():
                         value = getattr(term_obj, target_field, None)
                         if value is not None:
@@ -197,9 +190,7 @@ class EsgvocRegistrySource(TermSource):
                                 ),
                             )
             else:
-                for term_obj in ev.get_all_terms_in_collection(
-                    self.project, collection, version=self.version
-                ):
+                for term_obj in ev.get_all_terms_in_collection(self.project, collection, version=self.version):
                     terms.add(Term(name=term_obj.id, collection=collection))
         return terms
 
@@ -214,9 +205,13 @@ def build_source(source_config: dict) -> TermSource:
     if source_type == "git":
         return GitRepoSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
     if source_type == "git_esgvoc_format":
-        return GitRepoEsgvocFormatSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
+        return GitRepoEsgvocFormatSource(
+            owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"]
+        )
     if source_type == "git_emd":
-        return GitRepoEmdSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
+        return GitRepoEmdSource(
+            owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"]
+        )
     if source_type == "registry":
         return EsgvocRegistrySource(project=source_config["project"], version=source_config.get("version"))
     msg = f"Unknown source type: {source_type}"

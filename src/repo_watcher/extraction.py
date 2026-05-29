@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from models import FieldMappingConfig, Term
+from repo_watcher.models import FieldMappingConfig, Term
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,8 @@ def extract_term_data(
                     collection_data[term_key] = term_content
                 elif isinstance(term_content, str):
                     # Wrap plain-string values (e.g. activity_id descriptions)
-                    collection_data[term_key] = {"_value": term_content}
+                    # _key preserves the original case for drs_name
+                    collection_data[term_key] = {"_value": term_content, "_key": term_key}
             if collection_data:
                 result[collection_key] = collection_data
 

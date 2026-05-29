@@ -16,19 +16,19 @@ from typing import Any, Required, TypedDict
 class SourceConfig(TypedDict, total=False):
     """source: / reference: block in repos_config.yml."""
 
-    type: Required[str]        # "git", "git_esgvoc_format", "git_emd", "registry"
-    owner: str                 # GitHub org (git sources only)
-    repo: str                  # GitHub repo name (git sources only)
-    branch: str                # branch to clone (git sources only)
-    project: str               # esgvoc project id (registry only)
+    type: Required[str]  # "git", "git_esgvoc_format", "git_emd", "registry"
+    owner: str  # GitHub org (git sources only)
+    repo: str  # GitHub repo name (git sources only)
+    branch: str  # branch to clone (git sources only)
+    project: str  # esgvoc project id (registry only)
 
 
 class TermOverrideConfig(TypedDict, total=False):
     """Single override entry, e.g. tracking_id → prefuuid with custom regex."""
 
-    universe_term: Required[str]   # id of the universe term to link to
-    fields: dict[str, str]         # field overrides (e.g. {"regex": "^hdl:..."})
-    create_universe: bool          # scaffold a new universe term if missing
+    universe_term: Required[str]  # id of the universe term to link to
+    fields: dict[str, str]  # field overrides (e.g. {"regex": "^hdl:..."})
+    create_universe: bool  # scaffold a new universe term if missing
 
 
 class MultiStepConfig(TypedDict, total=False):
@@ -38,9 +38,9 @@ class MultiStepConfig(TypedDict, total=False):
          + organisation/ium-fdu + institution_id/ium-fdu
     """
 
-    separator: str                  # split term_id by this (e.g. "-")
+    separator: str  # split term_id by this (e.g. "-")
     member_descriptor: Required[str]  # universe type for each part (e.g. "institution")
-    group_descriptor: Required[str]   # universe type for the wrapper (e.g. "organisation")
+    group_descriptor: Required[str]  # universe type for the wrapper (e.g. "organisation")
 
 
 class FieldMappingConfig(TypedDict):
@@ -49,15 +49,15 @@ class FieldMappingConfig(TypedDict):
     Used by EMD-style field-level checks.
     """
 
-    target_collection: str              # registry collection to compare against
-    fields: dict[str, str]              # source_field → target_field
+    target_collection: str  # registry collection to compare against
+    fields: dict[str, str]  # source_field → target_field
 
 
 class TermIdTransform(TypedDict):
     """A single find/replace rule for normalizing term IDs."""
 
-    pattern: str    # substring to find
-    replace: str    # replacement string
+    pattern: str  # substring to find
+    replace: str  # replacement string
 
 
 class ReportMode(str, Enum):
@@ -65,7 +65,7 @@ class ReportMode(str, Enum):
 
     missing_in_ref = "missing_in_ref"  # in source but not reference (default)
     missing_in_src = "missing_in_src"  # in reference but not source
-    both = "both"                      # both directions
+    both = "both"  # both directions
 
 
 @dataclass(frozen=True)
@@ -163,15 +163,19 @@ class ConsistencyResult:
     def format_report(self, mode: ReportMode = ReportMode.missing_in_ref) -> str:
         lines: list[str] = []
         if mode in (ReportMode.missing_in_ref, ReportMode.both):
-            lines.extend(self._format_diff(
-                self.in_source_not_reference,
-                f"Terms in {self.source_label} not found in {self.reference_label}:",
-            ))
+            lines.extend(
+                self._format_diff(
+                    self.in_source_not_reference,
+                    f"Terms in {self.source_label} not found in {self.reference_label}:",
+                )
+            )
         if mode in (ReportMode.missing_in_src, ReportMode.both):
-            lines.extend(self._format_diff(
-                self.in_reference_not_source,
-                f"Terms in {self.reference_label} not found in {self.source_label}:",
-            ))
+            lines.extend(
+                self._format_diff(
+                    self.in_reference_not_source,
+                    f"Terms in {self.reference_label} not found in {self.source_label}:",
+                )
+            )
         if not lines:
             lines.append(f"{self.source_label} and {self.reference_label} are consistent ({len(self.common)} terms)")
         return "\n".join(lines)

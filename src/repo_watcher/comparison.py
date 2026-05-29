@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 import re
 
-from models import ConsistencyResult, Term, TermIdTransform
+from collections import defaultdict
+
+from repo_watcher.models import ConsistencyResult, Term, TermIdTransform
 
 logger = logging.getLogger(__name__)
 
@@ -32,18 +34,46 @@ def apply_term_id_transforms(terms: set[Term], transforms: dict[str, list[TermId
 
 def _apply_exclusions(terms: set[Term], exclude_terms: dict[str, list[str]]) -> set[Term]:
     """Remove terms whose name matches any regex pattern for their collection."""
-    compiled: dict[str, list[re.Pattern]] = {
-        col: [re.compile(p) for p in patterns]
-        for col, patterns in exclude_terms.items()
-    }
+    compiled: dict[str, list[re.Pattern]] = {}
     for col, patterns in exclude_terms.items():
-        for pattern in patterns:
-            logger.debug("Excluding terms matching /%s/ from collection '%s'", pattern, col)
+        compiled[col] = []
+        for p in patterns:
+            logger.debug("Excluding terms matching /%s/ from collection '%s'", p, col)
+            compiled[col].append(re.compile(p))
     return {
-        t for t in terms
-        if t.collection not in compiled
-        or not any(p.search(t.name) for p in compiled[t.collection])
+        t for t in terms if t.collection not in compiled or not any(p.search(t.name) for p in compiled[t.collection])
     }
+
+
+def identify_field_updates(
+    in_source_not_ref: set[Term],
+    in_ref_not_source: set[Term],
+) -> dict[tuple[str, str], dict[str, tuple[str, str]]]:
+    """Find field-level value changes by cross-referencing two diff sets.
+
+    For each (collection, name, field) that appears in both sets with different
+    values, records it as an update.
+
+    Returns {(collection, name): {field: (old_value, new_value)}}.
+    """
+    # Index ref-side field-level terms by (collection, name, field)
+    ref_index: dict[tuple[str, str, str], str] = {}
+    for t in in_ref_not_source:
+        if t.field is not None and t.value is not None:
+            ref_index[(t.collection, t.name, t.field)] = t.value
+
+    # Match source-side terms against the ref index
+    updates: dict[tuple[str, str], dict[str, tuple[str, str]]] = defaultdict(dict)
+    for t in in_source_not_ref:
+        if t.field is None or t.value is None:
+            continue
+        key = (t.collection, t.name, t.field)
+        if key in ref_index:
+            old_value = ref_index[key]
+            if old_value != t.value:
+                updates[(t.collection, t.name)][t.field] = (old_value, t.value)
+
+    return dict(updates)
 
 
 def compare_terms(

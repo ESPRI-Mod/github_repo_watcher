@@ -38,6 +38,7 @@ checks:
     source_prefill:
       activity_id:
         _value: description
+        _key: drs_name
       source_id:
         source_id: drs_name
         label: label
@@ -215,7 +216,7 @@ checks:
         target_collection: grid_label
         fields:
           validation_key: drs_name
-          description: description
+          ui_label: description
     generation_defaults:
       grid_label:
         region: "global"

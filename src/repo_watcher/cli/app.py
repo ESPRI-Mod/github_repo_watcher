@@ -4,39 +4,33 @@ from __future__ import annotations
 
 import warnings
 
-warnings.filterwarnings("ignore", message="Config key.*is set in model_config but will be ignored", category=UserWarning, module="pydantic_settings")
+warnings.filterwarnings(
+    "ignore",
+    message="Config key.*is set in model_config but will be ignored",
+    category=UserWarning,
+    module="pydantic_settings",
+)
 warnings.filterwarnings("ignore", message="EMD Conformance:", category=UserWarning, module="pydantic")
 
 from pathlib import Path
-from typing import Annotated, Any, Optional
+from typing import Annotated, Optional
 
 import typer
 import yaml
 
-import esgvoc.api as ev
-
-from comparison import apply_term_id_transforms, compare_terms
-from generation import generate_missing_terms, write_report
-from models import CheckConfig, MultiStepConfig, ProjectResult, ReportMode, TermIdTransform, TermOverrideConfig
-from sources import build_source
+from repo_watcher.comparison import apply_term_id_transforms, compare_terms
+from repo_watcher.generation import collect_and_generate, write_report
+from repo_watcher.models import (
+    CheckConfig,
+    ProjectResult,
+    ReportMode,
+)
+from repo_watcher.sources import build_source
 
 app = typer.Typer(
     name="repo-watcher",
     help="Check consistency between git CV repos and the esgvoc registry.",
 )
-
-
-def _detect_collection_types_from_registry(project: str) -> dict[str, str]:
-    """Query esgvoc registry to build collection->universe_type mapping.
-
-    Samples the first term in each collection and reads its type.
-    """
-    mapping: dict[str, str] = {}
-    for col in ev.get_all_collections_in_project(project):
-        terms = list(ev.get_all_terms_in_collection(project, col))
-        if terms:
-            mapping[col] = terms[0].type
-    return mapping
 
 
 def _source_label(cfg: dict) -> str:
@@ -93,7 +87,9 @@ def _load_checks(config_path: Path) -> list[CheckConfig]:
 def check(
     name: Annotated[str, typer.Argument(help="Name of the check to run from repos_config.yml.")],
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
-    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
+    mode: Annotated[
+        ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")
+    ] = ReportMode.missing_in_ref,
 ) -> None:
     """Run a single consistency check by name."""
     checks = _load_checks(config)
@@ -108,7 +104,9 @@ def check(
 @app.command()
 def check_all(
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
-    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
+    mode: Annotated[
+        ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")
+    ] = ReportMode.missing_in_ref,
 ) -> None:
     """Run all consistency checks from the config file."""
     checks = _load_checks(config)
@@ -133,9 +131,13 @@ def list_checks(
 
 @app.command()
 def project(
-    project_name: Annotated[str, typer.Argument(help="Project id to check (e.g. cmip7). Runs all checks matching this project.")],
+    project_name: Annotated[
+        str, typer.Argument(help="Project id to check (e.g. cmip7). Runs all checks matching this project.")
+    ],
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
-    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
+    mode: Annotated[
+        ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")
+    ] = ReportMode.missing_in_ref,
     detail: Annotated[bool, typer.Option("--detail", help="Show per-source breakdown.")] = False,
 ) -> None:
     """Run all checks for a project and show a unified report."""
@@ -195,8 +197,14 @@ def generate_missing(
     universe_repo: Annotated[Path, typer.Option(help="Path to local WCRP-universe repo.")] = Path("../WCRP-universe"),
     config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
     collections: Annotated[Optional[list[str]], typer.Option(help="Only generate for these collections.")] = None,
-    write_project: Annotated[Optional[Path], typer.Option("--write-project", help="Write project link files to this local project repo path.")] = None,
-    write_universe: Annotated[Optional[Path], typer.Option("--write-universe", help="Write universe term files to this local universe repo path.")] = None,
+    write_project: Annotated[
+        Optional[Path],
+        typer.Option("--write-project", help="Write project link files to this local project repo path."),
+    ] = None,
+    write_universe: Annotated[
+        Optional[Path],
+        typer.Option("--write-universe", help="Write universe term files to this local universe repo path."),
+    ] = None,
 ) -> None:
     """Show what term files would need to be created in universe and project repos."""
     if not universe_repo.is_dir():
@@ -216,152 +224,12 @@ def generate_missing(
         typer.echo(f"No checks for project '{project_name}'. Available: {', '.join(available)}", err=True)
         raise typer.Exit(code=1)
 
-    # Merge all config options across checks
-    merged_excludes: dict[str, list[str]] = {}
-    merged_universe_type_mappings: dict[str, str] = {}
-    merged_generation_defaults: dict[str, dict[str, Any]] = {}
-    merged_term_id_transforms: dict[str, list[TermIdTransform]] = {}
-    merged_term_overrides: dict[str, dict[str, TermOverrideConfig]] = {}
-    merged_multi_step_terms: dict[str, MultiStepConfig] = {}
-    merged_source_prefill: dict[str, dict[str, str]] = {}
-    for chk in matching:
-        if chk.exclude_terms:
-            for col, patterns in chk.exclude_terms.items():
-                merged_excludes.setdefault(col, []).extend(patterns)
-        if chk.universe_type_mappings:
-            merged_universe_type_mappings.update(chk.universe_type_mappings)
-        if chk.generation_defaults:
-            for col, defaults in chk.generation_defaults.items():
-                merged_generation_defaults.setdefault(col, {}).update(defaults)
-        if chk.term_id_transforms:
-            for col, rules in chk.term_id_transforms.items():
-                merged_term_id_transforms.setdefault(col, []).extend(rules)
-        if chk.term_overrides:
-            for col, overrides in chk.term_overrides.items():
-                merged_term_overrides.setdefault(col, {}).update(overrides)
-        if chk.multi_step_terms:
-            merged_multi_step_terms.update(chk.multi_step_terms)
-        if chk.source_prefill:
-            merged_source_prefill.update(chk.source_prefill)
-
-    # Collect all terms missing from the reference across all checks
-    all_missing: set = set()
-    # Field values from ALL source terms (not just missing) for checks with field_mappings.
-    # Used to pre-fill generation skeletons even when a field matches the registry.
-    all_source_field_values: dict[tuple[str, str], dict[str, str]] = {}
-    source_repo_paths: list[Path] = []
-    source_check_repos: list[tuple[CheckConfig, Path]] = []
-    for chk in matching:
-        source = build_source(chk.source)
-        ref = build_source(chk.reference)
-
-        typer.echo(f"[{chk.name}] Fetching {source.label()}...")
-        source_terms = source.get_terms(
-            project=chk.project,
-            only_collections=chk.only_collections,
-            skip_collections=chk.skip_collections,
-            field_mappings=chk.field_mappings,
-        )
-
-        # Capture field values from ALL source terms (for checks with field_mappings)
-        # so generation can pre-fill skeletons even when a field matches the registry.
-        if chk.field_mappings:
-            for t in source_terms:
-                if t.field and t.value is not None:
-                    all_source_field_values.setdefault((t.collection, t.name), {})[t.field] = t.value
-
-        if chk.term_id_transforms:
-            source_terms = apply_term_id_transforms(source_terms, chk.term_id_transforms)
-
-        repo_path = source.repo_path()
-        if repo_path is not None:
-            source_repo_paths.append(repo_path)
-            source_check_repos.append((chk, repo_path))
-
-        typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
-        ref_terms = ref.get_terms(
-            project=chk.project,
-            only_collections=chk.only_collections,
-            skip_collections=chk.skip_collections,
-            field_mappings=chk.field_mappings,
-        )
-
-        result = compare_terms(
-            source_terms=source_terms,
-            reference_terms=ref_terms,
-            source_label=source.label(),
-            reference_label=ref.label(),
-            collection_mappings=chk.collection_mappings,
-            exclude_terms=chk.exclude_terms,
-        )
-        all_missing |= result.in_source_not_reference
-
-    # Build collection->universe_type mapping.
-    # Priority: 1) 000_context.jsonld from source repos  2) esgvoc registry  3) config overrides
-    from generation import detect_collection_mapping
-
-    type_mapping: dict[str, str] = {}
-
-    # 1) esgvoc registry as baseline
-    typer.echo(f"Detecting collection types from esgvoc/{project_name}...")
-    type_mapping.update(_detect_collection_types_from_registry(project_name))
-
-    # 2) 000_context.jsonld from source repos (overrides registry — this is the project truth)
-    for repo_path in source_repo_paths:
-        context_mapping = detect_collection_mapping(repo_path)
-        if context_mapping:
-            type_mapping.update(context_mapping)
-
-    # 3) Config overrides (last resort for exceptional cases)
-    type_mapping.update(merged_universe_type_mappings)
-
-    # Collect esgvoc-format repos (have context files) for project link checks,
-    # fall back to any available source repo
-    project_repo_paths: list[Path] = [
-        p for p in source_repo_paths if detect_collection_mapping(p)
-    ]
-    if not project_repo_paths:
-        project_repo_paths = list(source_repo_paths)
-
-    if not project_repo_paths:
-        typer.echo("No source repo path available for generation.", err=True)
-        raise typer.Exit(code=1)
-
-    if merged_excludes:
-        from comparison import _apply_exclusions
-        all_missing = _apply_exclusions(all_missing, merged_excludes)
-
-    if collections:
-        all_missing = {t for t in all_missing if t.collection in collections}
-
-    if not all_missing:
-        typer.echo(typer.style("Nothing to generate — all terms are up to date.", fg=typer.colors.GREEN))
-        raise typer.Exit()
-
-    # Extract source term data for prefill (re-read community CV for field values)
-    source_term_data: dict[str, dict[str, dict]] = {}
-    if merged_source_prefill:
-        from extraction import extract_term_data
-        prefill_collections = list(merged_source_prefill.keys())
-        for chk, repo_path in source_check_repos:
-            if chk.source.get("type") != "git":
-                continue
-            cv_dir = repo_path / "CVs" if chk.project == "input4mip" else repo_path
-            data = extract_term_data(cv_dir, chk.project, collections=prefill_collections)
-            for col, terms in data.items():
-                source_term_data.setdefault(col, {}).update(terms)
-
-    report = generate_missing_terms(
-        missing_terms=all_missing,
+    report = collect_and_generate(
+        checks=matching,
         universe_repo=universe_repo,
-        project_repos=project_repo_paths,
-        universe_type_overrides=type_mapping or None,
-        generation_defaults=merged_generation_defaults or None,
-        term_overrides=merged_term_overrides or None,
-        multi_step_terms=merged_multi_step_terms or None,
-        source_prefill=merged_source_prefill or None,
-        source_term_data=source_term_data or None,
-        extra_field_values=all_source_field_values or None,
+        project_name=project_name,
+        collections_filter=collections,
+        on_progress=typer.echo,
     )
 
     typer.echo()
@@ -378,9 +246,11 @@ def generate_missing(
         )
         parts = []
         if write_universe is not None and report.universe_to_create:
-            parts.append(f"{len(report.universe_to_create)} universe file(s) to {write_universe.resolve()}")
+            parts.append(f"{len(report.universe_to_create)} universe file(s) created in {write_universe.resolve()}")
+        if write_universe is not None and report.universe_to_update:
+            parts.append(f"{len(report.universe_to_update)} universe file(s) updated in {write_universe.resolve()}")
         if write_project is not None and report.project_to_create:
-            parts.append(f"{len(report.project_to_create)} project file(s) to {write_project.resolve()}")
+            parts.append(f"{len(report.project_to_create)} project file(s) created in {write_project.resolve()}")
         if parts:
             typer.echo(f"\nWritten: {', '.join(parts)}. Review the generated skeletons and fill in placeholder values.")
 
@@ -394,7 +264,9 @@ def git_vs_registry(
     skip: Annotated[Optional[list[str]], typer.Option(help="Collections to skip.")] = None,
     only: Annotated[Optional[list[str]], typer.Option(help="Only check these collections.")] = None,
     collection_mapping: Annotated[Optional[list[str]], typer.Option(help="Collection mapping as key=value.")] = None,
-    mode: Annotated[ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")] = ReportMode.missing_in_ref,
+    mode: Annotated[
+        ReportMode, typer.Option(help="Report mode: missing_in_ref (default), missing_in_src, or both.")
+    ] = ReportMode.missing_in_ref,
 ) -> None:
     """Ad-hoc check: compare a git repo branch against the esgvoc registry."""
     mappings = None

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from extraction import extract_terms, validate_typing
-from models import Term
+from repo_watcher.extraction import extract_terms, validate_typing
+from repo_watcher.models import Term
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

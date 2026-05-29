@@ -11,9 +11,9 @@ from prefect.blocks.system import Secret
 from prefect.runtime import flow_run
 from prefect.variables import Variable
 
-from comparison import compare_terms
-from models import CheckConfig, ConsistencyResult
-from sources import TermSource, build_source
+from repo_watcher.comparison import compare_terms
+from repo_watcher.models import CheckConfig, ConsistencyResult
+from repo_watcher.sources import TermSource, build_source
 
 
 @task(retries=3, retry_delay_seconds=[30, 60, 120], log_prints=True)

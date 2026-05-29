@@ -13,7 +13,7 @@ from prefect import flow
 from prefect.runner.storage import GitRepository
 from prefect_github import GitHubRepository
 
-from models import CheckConfig
+from repo_watcher.models import CheckConfig
 
 
 class SpiritGitRepository(GitRepository):
@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     code = flow.from_source(
         git_storage,
-        entrypoint="orchestration.py:check_consistency",
+        entrypoint="src/repo_watcher/orchestration.py:check_consistency",
     )
 
     for check in checks:
