@@ -6,8 +6,10 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "esgvoc>=1.2.0",
-    "gitpython>=3.1.45",
-    "prefect[github]<3.3",
+    "gitpython>=3.1.46",
+    "griffe",
+    "prefect-espri>=0.13.1",
+    "prefect-github<0.4.0",
     "pyyaml>=6.0.2",
     "requests>=2.32.5",
     "typer>=0.12.0",
@@ -39,3 +41,7 @@ lint.ignore = [
     "D212", # multi-line docstring start
 ]
 line-length = 120
+
+[[tool.uv.index]]
+name = "gitlab-prefect-espri"
+url = "https://gitlab.in2p3.fr/api/v4/projects/27799/packages/pypi/simple"
