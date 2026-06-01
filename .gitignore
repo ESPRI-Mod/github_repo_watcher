@@ -1,3 +1,6 @@
+# Project-specific
+md_dir/
+
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
 
@@ -182,3 +185,4 @@ uv.lock
 .python-version
 uv.lock
 .vscode/settings.json
+md_dir/upgrade_plan.md

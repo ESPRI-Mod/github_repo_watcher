@@ -1,9 +1,9 @@
-"""
-Deploy Prefect flows for repository consistency checks.
+"""Deploy Prefect flows for repository consistency checks.
 
-This module orchestrates deployments for monitoring branch consistency
-across multiple repositories using Prefect workflows and GitHub integration.
+Reads repos_config.yml, creates one Prefect deployment per check.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, override
@@ -12,18 +12,12 @@ import yaml
 from prefect import flow
 from prefect.runner.storage import GitRepository
 from prefect_github import GitHubRepository
-from pydantic import BaseModel
 
-from branch_consistency import EsgvocConfig, Repo
+from repo_watcher.models import CheckConfig
 
 
 class SpiritGitRepository(GitRepository):
-    """
-    Custom GitRepository implementation for Prefect deployments on SLURM systems.
-
-    Extends GitRepository to add SLURM-specific setup steps for cloning repositories
-    in temporary job directories.
-    """
+    """Custom GitRepository for Prefect deployments on SLURM systems."""
 
     @override
     def to_pull_step(self) -> list[dict[str, Any]]:
@@ -39,27 +33,14 @@ class SpiritGitRepository(GitRepository):
                 "directory": "/tmp/{{ $SLURM_JOBID }}/",
             },
         }
-        return [
-            mkdir_step,
-            cd_tmp_jobid_step,
-            git_clone_step,
-        ]
-
-
-class Config(BaseModel):
-    """Configuration for a repository consistency check."""
-
-    owner: str
-    repo: str
-    reference_branch: str | None = None
-    project: str
+        return [mkdir_step, cd_tmp_jobid_step, git_clone_step]
 
 
 if __name__ == "__main__":
     with Path("repos_config.yml").open() as f:
-        configs: list[Config] = [
-            Config(**config) for config in yaml.safe_load(f)["repos"]
-        ]
+        raw_config = yaml.safe_load(f)
+
+    checks = [CheckConfig(**entry) for entry in raw_config["checks"]]
 
     github_storage = GitHubRepository.load("repo-watcher")
     git_storage = SpiritGitRepository(
@@ -70,34 +51,15 @@ if __name__ == "__main__":
 
     code = flow.from_source(
         git_storage,
-        entrypoint="branch_consistency.py:are_branch_consistent",
+        entrypoint="src/repo_watcher/orchestration.py:check_consistency",
     )
 
-    deployments = []
-    for config in configs:
-        if config.reference_branch is None:
-            continue
-
-        repo_reference = Repo(
-            url=f"https://github.com/{config.owner}/{config.repo}",
-            branch=config.reference_branch,
-            project=config.project,
-        )
-
-        name = repo_reference.nicename.replace("/", "-")
+    for check in checks:
         deployment = code.deploy(
-            name,
+            check.name,
             work_pool_name="alaupin-spiritx",
-            tags=[
-                "consistency",
-                repo_reference.nicename,
-                repo_reference.branch,
-                repo_reference.nicename.split("@")[0],
-            ],
-            parameters={
-                "project_repo": repo_reference,
-                "esgvoc_config": EsgvocConfig.prod,
-            },
+            tags=["consistency", check.name],
+            parameters={"check": check},
             cron="0 6 * * 1-5",
         )
         print(deployment)

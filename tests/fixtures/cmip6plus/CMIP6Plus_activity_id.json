@@ -1,0 +1,6 @@
+{
+    "activity_id": {
+        "CMIP": {"long_name": "CMIP DECK"},
+        "LESFMIP": "LESFMIP"
+    }
+}

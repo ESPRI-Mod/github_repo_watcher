@@ -1,25 +1,248 @@
-repos:
-  - owner: WCRP-CORDEX
-    repo: cordex-cmip6-cv
-    reference_branch: main
+checks:
+  # ──────────────────────────────────────────────────────────
+  # Community branch vs esgvoc registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cordex-cmip6-consistency
+    source:
+      type: git
+      owner: WCRP-CORDEX
+      repo: cordex-cmip6-cv
+      branch: main
+    reference:
+      type: registry
+      project: cordex-cmip6
     project: cordex-cmip6
-  - owner: PCMDI
-    repo: input4MIPs_CVs
-    reference_branch: main
-    project: input4mip
-  - owner: WCRP-CMIP
-    repo: CMIP6Plus_CVs
-    reference_branch: main
-    project: cmip6plus
-  - owner: WCRP-CMIP
-    repo: CMIP6_CVs
-    reference_branch: main
+    skip_collections:
+      - driving_variant_label
+      - project_id
+      - license
+    collection_mappings:
+      table_id: frequency
+    universe_type_mappings:
+      source_id: source
+      version_realization: variant_label
+    term_overrides:
+      tracking_id:
+        "hdl:21.14103/.*":
+          universe_term: prefuuid
+          fields:
+            regex: "^hdl:21\\.14103/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"
+      version_realization:
+        "v[1-9]\\{1,\\}[[:digit:]]\\{0,\\}-r[1-9]\\{1,\\}[[:digit:]]\\{0,\\}$":
+          universe_term: vr
+          create_universe: true
+          fields:
+            regex: "^v\\d+-r\\d+$"
+            description: "CORDEX version-realization label (e.g. v1-r1)"
+    source_prefill:
+      activity_id:
+        _value: description
+        _key: drs_name
+      source_id:
+        source_id: drs_name
+        label: label
+        label_extended: label_extended
+        activity_participation: activity_participation
+        cohort: cohort
+        release_year: release_year
+    multi_step_terms:
+      institution_id:
+        separator: "-"
+        member_descriptor: institution
+        group_descriptor: organisation
+
+  # ──────────────────────────────────────────────────────────
+  # CORDEX-CMIP6: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cordex-cmip6-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CORDEX
+      repo: cordex-cmip6-cv
+      branch: esgvoc
+    reference:
+      type: registry
+      project: cordex-cmip6
+    project: cordex-cmip6
+
+  - name: cordex-cmip6-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CORDEX
+      repo: cordex-cmip6-cv
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: cordex-cmip6
+    project: cordex-cmip6
+
+  - name: cmip6-consistency
+    source:
+      type: git
+      owner: WCRP-CMIP
+      repo: CMIP6_CVs
+      branch: main
+    reference:
+      type: registry
+      project: cmip6
     project: cmip6
-  - owner: WCRP-CMIP
-    repo: Variable-Registry
-    reference_branch: null
-    project: Variable-Registry
-  - owner: alaupin-ipsl
-    repo: CMIP7_CVs
-    reference_branch: null
-    project: CMIP7
+    skip_collections:
+      - version_metadata
+      - license
+    term_id_transforms:
+      nominal_resolution:
+        - pattern: " "
+          replace: ""
+
+  - name: cmip6plus-consistency
+    source:
+      type: git
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: main
+    reference:
+      type: registry
+      project: cmip6plus
+    project: cmip6plus
+    skip_collections:
+      - Header
+      - license
+    term_overrides:
+      tracking_id:
+        "hdl:21.14100/.*":
+          universe_term: prefuuid
+          fields:
+            regex: "^hdl:21\\.14100/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"
+
+  # ──────────────────────────────────────────────────────────
+  # CMIP6Plus: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cmip6plus-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: esgvoc
+    reference:
+      type: registry
+      project: cmip6plus
+    project: cmip6plus
+
+  - name: cmip6plus-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: cmip6plus
+    project: cmip6plus
+
+  - name: input4mip-consistency
+    source:
+      type: git
+      owner: PCMDI
+      repo: input4MIPs_CVs
+      branch: main
+    reference:
+      type: registry
+      project: input4mip
+    project: input4mip
+
+  # ──────────────────────────────────────────────────────────
+  # CMIP7: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cmip7-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP7-CVs
+      branch: esgvoc
+    reference:
+      type: registry
+      project: cmip7
+    project: cmip7
+    skip_collections:
+      - drs_specs
+    exclude_terms:
+      grid_label:
+        - "^tempgrid"
+
+  - name: cmip7-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP7-CVs
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: cmip7
+    project: cmip7
+    skip_collections:
+      - drs_specs
+    exclude_terms:
+      grid_label:
+        - "^tempgrid"
+
+  # ──────────────────────────────────────────────────────────
+  # EMD src-data vs CMIP7 registry (field-level)
+  # ──────────────────────────────────────────────────────────
+
+  - name: emd-vs-cmip7-registry
+    source:
+      type: git_emd
+      owner: WCRP-CMIP
+      repo: Essential-Model-Documentation
+      branch: src-data
+    reference:
+      type: registry
+      project: cmip7
+    project: cmip7
+    only_collections:
+      - source
+      - grid_label
+    field_mappings:
+      model:
+        target_collection: source
+        fields:
+          validation_key: drs_name
+          description: description
+      horizontal_grid_cell:
+        target_collection: grid_label
+        fields:
+          validation_key: drs_name
+          ui_label: description
+    generation_defaults:
+      grid_label:
+        region: "global"
+
+  # ──────────────────────────────────────────────────────────
+  # Obs4REF: main branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: obs4ref-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: Climate-REF
+      repo: Obs4REF_CVs
+      branch: main
+    reference:
+      type: registry
+      project: obs4ref
+    project: obs4ref
+
+  - name: obs4ref-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: Climate-REF
+      repo: Obs4REF_CVs
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: obs4ref
+    project: obs4ref
