@@ -18,7 +18,7 @@ from typing import Annotated, Optional
 import typer
 import yaml
 
-from repo_watcher.comparison import apply_term_id_transforms, compare_terms
+from repo_watcher.comparison import apply_term_id_transforms, apply_term_overrides, compare_terms
 from repo_watcher.generation import collect_and_generate, write_report
 from repo_watcher.models import (
     CheckConfig,
@@ -54,6 +54,8 @@ def _run_check(check: CheckConfig, mode: ReportMode = ReportMode.missing_in_ref)
 
     if check.term_id_transforms:
         source_terms = apply_term_id_transforms(source_terms, check.term_id_transforms)
+    if check.term_overrides:
+        source_terms = apply_term_overrides(source_terms, check.term_overrides)
 
     typer.echo(f"Fetching terms from {ref.label()}...")
     ref_terms = ref.get_terms(
@@ -167,6 +169,8 @@ def project(
 
         if chk.term_id_transforms:
             source_terms = apply_term_id_transforms(source_terms, chk.term_id_transforms)
+        if chk.term_overrides:
+            source_terms = apply_term_overrides(source_terms, chk.term_overrides)
 
         typer.echo(f"[{chk.name}] Fetching {ref.label()}...")
         ref_terms = ref.get_terms(

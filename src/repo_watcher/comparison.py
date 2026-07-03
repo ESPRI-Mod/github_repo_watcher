@@ -10,7 +10,7 @@ import re
 
 from collections import defaultdict
 
-from repo_watcher.models import ConsistencyResult, Term, TermIdTransform
+from repo_watcher.models import ConsistencyResult, Term, TermIdTransform, TermOverrideConfig
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,27 @@ def apply_term_id_transforms(terms: set[Term], transforms: dict[str, list[TermId
             for rule in transforms[t.collection]:
                 name = name.replace(rule["pattern"], rule["replace"])
             result.add(Term(name=name, collection=t.collection, field=t.field, value=t.value))
+        else:
+            result.add(t)
+    return result
+
+
+def apply_term_overrides(
+    terms: set[Term],
+    overrides: dict[str, dict[str, TermOverrideConfig]],
+) -> set[Term]:
+    """Remap source term names using term_overrides config.
+
+    For each collection with overrides, if a term's name matches an override
+    key (exact string match), replace it with the override's universe_term.
+    This allows the comparison to recognise e.g. ``hdl:21.14100/.*`` as
+    the existing registry term ``prefuuid``.
+    """
+    result: set[Term] = set()
+    for t in terms:
+        if t.collection in overrides and t.name in overrides[t.collection]:
+            replacement = overrides[t.collection][t.name]["universe_term"]
+            result.add(Term(name=replacement, collection=t.collection, field=t.field, value=t.value))
         else:
             result.add(t)
     return result
