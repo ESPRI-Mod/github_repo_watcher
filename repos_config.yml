@@ -131,6 +131,19 @@ checks:
       project: cmip6plus
     project: cmip6plus
 
+  - name: cmip6plus-esgvoc-dev-vs-esgvoc
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: esgvoc_dev
+    reference:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6Plus_CVs
+      branch: esgvoc
+    project: cmip6plus
+
   - name: cmip6plus-esgvoc-dev-vs-registry
     source:
       type: git_esgvoc_format
@@ -162,7 +175,7 @@ checks:
       type: git_esgvoc_format
       owner: WCRP-CMIP
       repo: CMIP7-CVs
-      branch: esgvoc
+      branch: main
     reference:
       type: registry
       project: cmip7
