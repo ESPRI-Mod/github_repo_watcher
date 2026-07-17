@@ -218,6 +218,18 @@ class ProjectResult:
             all_in_ref_not_source |= r.in_reference_not_source
             all_common |= r.common
 
+        # Filter out field-level terms whose base term already exists in common
+        # (these are value diffs on known terms, not actionable for PR generation)
+        common_bases = {(t.collection.lower(), t.name.lower()) for t in all_common}
+        all_in_source_not_ref = {
+            t for t in all_in_source_not_ref
+            if not t.field or (t.collection.lower(), t.name.lower()) not in common_bases
+        }
+        all_in_ref_not_source = {
+            t for t in all_in_ref_not_source
+            if not t.field or (t.collection.lower(), t.name.lower()) not in common_bases
+        }
+
         has_diff = False
         if mode in (ReportMode.missing_in_ref, ReportMode.both) and all_in_source_not_ref:
             lines.append(f"Missing in {self.reference_label} (across all sources):")
@@ -235,11 +247,16 @@ class ProjectResult:
         if detail:
             lines.extend(["", "Per source:"])
             for source_label, r in self.check_results:
+                per_common = {(t.collection.lower(), t.name.lower()) for t in r.common}
                 terms = set()
                 if mode in (ReportMode.missing_in_ref, ReportMode.both):
                     terms |= r.in_source_not_reference
                 if mode in (ReportMode.missing_in_src, ReportMode.both):
                     terms |= r.in_reference_not_source
+                terms = {
+                    t for t in terms
+                    if not t.field or (t.collection.lower(), t.name.lower()) not in per_common
+                }
                 if terms:
                     lines.append(f"  {source_label}:")
                     lines.extend(f"  {line}" for line in self._format_diff_grouped(terms))
