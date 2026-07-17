@@ -286,6 +286,13 @@ def extract_terms_emd(
             raw_id = data.get("@id") or data.get("id") or term_file.stem
             term_id = raw_id.replace("-", "_")
 
+            # Skip computational grids: in EMD, output grids have a single
+            # region while computational grids list multiple regions.
+            region = data.get("region")
+            if isinstance(region, list) and len(region) > 1:
+                logger.info("Skipping computational grid %s (multi-region)", term_id)
+                continue
+
             for source_field, target_field in fields.items():
                 if source_field in data:
                     result.add(
