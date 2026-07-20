@@ -121,6 +121,8 @@ def _build_universe_skeleton(universe_repo: Path, descriptor: str, term_id: str)
             continue
         if isinstance(value, list):
             result[key] = []
+        elif isinstance(value, dict):
+            result[key] = {}
         elif key in _STRING_DEFAULT_FIELDS:
             result[key] = ""
         else:
