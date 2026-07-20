@@ -804,8 +804,10 @@ def collect_and_generate(
         for chk, repo_path in source_check_repos:
             if chk.source.get("type") != "git":
                 continue
-            cv_dir = repo_path / "CVs" if chk.project == "input4mip" else repo_path
-            data = extract_term_data(cv_dir, chk.project, collections=list(extract_collections))
+            cv_subdir = chk.source.get("cv_subdir")
+            cv_dir = repo_path / cv_subdir if cv_subdir else repo_path
+            cv_format = chk.source.get("cv_format")
+            data = extract_term_data(cv_dir, chk.project, collections=list(extract_collections), cv_format=cv_format)
             for col, terms in data.items():
                 source_term_data.setdefault(col, {}).update(terms)
 

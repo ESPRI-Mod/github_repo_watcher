@@ -161,10 +161,12 @@ checks:
       owner: PCMDI
       repo: input4MIPs_CVs
       branch: main
+      cv_subdir: CVs
+      cv_format: input4mips
     reference:
       type: registry
-      project: input4mip
-    project: input4mip
+      project: input4mips
+    project: input4mips
 
   # ──────────────────────────────────────────────────────────
   # CMIP7: esgvoc branch vs registry

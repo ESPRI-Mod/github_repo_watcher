@@ -39,7 +39,7 @@ INPUT_TYPES: dict[str, type] = {
     "cordex-cmip6": CordexCMIP6InputDict,
     "cmip6": CMIP6InputDict,
     "cmip6plus": CMIP6PlusInputDict,
-    "input4mip": Input4MipsInputDict,
+    "input4mips": Input4MipsInputDict,
 }
 
 # Collections to always skip (applied before project-specific skips)
@@ -50,12 +50,19 @@ GLOBAL_EXCLUDED_COLLECTIONS = [
 ]
 
 
-def validate_typing(data: str, project: str) -> dict | list:
-    """Validate JSON data against the expected type for a project."""
-    if project not in INPUT_TYPES:
-        msg = f"Unknown project: {project}"
+def _resolve_format(project: str, cv_format: str | None = None) -> str:
+    """Resolve the CV format key: explicit cv_format wins, else fall back to project."""
+    fmt = cv_format or project
+    if fmt not in INPUT_TYPES:
+        msg = f"Unknown CV format: {fmt}"
         raise KeyError(msg)
-    return TypeAdapter(INPUT_TYPES[project]).validate_json(data)
+    return fmt
+
+
+def validate_typing(data: str, project: str, cv_format: str | None = None) -> dict | list:
+    """Validate JSON data against the expected type for a project."""
+    fmt = _resolve_format(project, cv_format)
+    return TypeAdapter(INPUT_TYPES[fmt]).validate_json(data)
 
 
 def prepare_json(
@@ -63,6 +70,7 @@ def prepare_json(
     project: str,
     collection_path: Path,
     skip_collections: list[str] | None = None,
+    cv_format: str | None = None,
 ) -> VocabularyDict:
     """Normalize any project's JSON CV format into {collection: {term: params}}.
 
@@ -71,13 +79,14 @@ def prepare_json(
     - Input4MIPs derives collection name from filename and has a target_mip special case
     - Everything else (dict of dicts, dict of lists) is identical
     """
+    fmt = _resolve_format(project, cv_format)
     all_skips = list(GLOBAL_EXCLUDED_COLLECTIONS)
     if skip_collections:
         all_skips.extend(skip_collections)
 
-    if project == "input4mip":
+    if fmt == "input4mips":
         return _prepare_json_input4mip(data, collection_path, all_skips)
-    return _prepare_json_standard(data, project, all_skips)
+    return _prepare_json_standard(data, fmt, all_skips)
 
 
 def _prepare_json_standard(
@@ -156,6 +165,7 @@ def extract_terms(
     only_collections: list[str] | None = None,
     skip_collections: list[str] | None = None,
     field_mappings: dict[str, FieldMappingConfig] | None = None,
+    cv_format: str | None = None,
 ) -> set[Term]:
     """Extract terms from a local directory of JSON CV files."""
     result: set[Term] = set()
@@ -165,8 +175,8 @@ def extract_terms(
             continue
 
         contents = collection_path.read_text()
-        validated = validate_typing(contents, project)
-        prepared = prepare_json(validated, project, collection_path, skip_collections)
+        validated = validate_typing(contents, project, cv_format)
+        prepared = prepare_json(validated, project, collection_path, skip_collections, cv_format)
 
         for collection_key, terms in prepared.items():
             if field_mappings and collection_key in field_mappings:
@@ -186,6 +196,7 @@ def extract_term_data(
     cv_directory: Path,
     project: str,
     collections: list[str] | None = None,
+    cv_format: str | None = None,
 ) -> dict[str, dict[str, dict]]:
     """Extract raw term data from community CV files.
 
@@ -199,8 +210,8 @@ def extract_term_data(
             continue
 
         contents = collection_path.read_text()
-        validated = validate_typing(contents, project)
-        prepared = prepare_json(validated, project, collection_path)
+        validated = validate_typing(contents, project, cv_format)
+        prepared = prepare_json(validated, project, collection_path, cv_format=cv_format)
 
         for collection_key, terms in prepared.items():
             if collections and collection_key not in collections:

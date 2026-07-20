@@ -52,10 +52,13 @@ def _clone_repo(owner: str, repo: str, branch: str) -> Path:
 class GitRepoSource(TermSource):
     """Clone a repo at a given branch, extract terms from JSON CVs."""
 
-    def __init__(self, owner: str, repo: str, branch: str) -> None:
+    def __init__(self, owner: str, repo: str, branch: str,
+                 cv_subdir: str | None = None, cv_format: str | None = None) -> None:
         self.owner = owner
         self.repo = repo
         self.branch = branch
+        self.cv_subdir = cv_subdir
+        self.cv_format = cv_format
         self._dest: Path | None = None
 
     def get_terms(
@@ -66,10 +69,11 @@ class GitRepoSource(TermSource):
         field_mappings: dict[str, FieldMappingConfig] | None = None,
     ) -> set[Term]:
         self._dest = _clone_repo(self.owner, self.repo, self.branch)
-        cv_dir = self._dest / "CVs" if project == "input4mip" else self._dest
+        cv_dir = self._dest / self.cv_subdir if self.cv_subdir else self._dest
         return extract_terms(
             cv_directory=cv_dir,
             project=project,
+            cv_format=self.cv_format,
             only_collections=only_collections,
             skip_collections=skip_collections,
             field_mappings=field_mappings,
@@ -203,7 +207,10 @@ def build_source(source_config: dict) -> TermSource:
     """Factory: config dict -> TermSource instance."""
     source_type = source_config["type"]
     if source_type == "git":
-        return GitRepoSource(owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"])
+        return GitRepoSource(
+            owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"],
+            cv_subdir=source_config.get("cv_subdir"), cv_format=source_config.get("cv_format"),
+        )
     if source_type == "git_esgvoc_format":
         return GitRepoEsgvocFormatSource(
             owner=source_config["owner"], repo=source_config["repo"], branch=source_config["branch"]

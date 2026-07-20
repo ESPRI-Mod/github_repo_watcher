@@ -21,6 +21,8 @@ class SourceConfig(TypedDict, total=False):
     repo: str  # GitHub repo name (git sources only)
     branch: str  # branch to clone (git sources only)
     project: str  # esgvoc project id (registry only)
+    cv_subdir: str  # subdirectory containing CV files (e.g. "CVs")
+    cv_format: str  # JSON format for extraction (e.g. "input4mips")
 
 
 class TermOverrideConfig(TypedDict, total=False):
