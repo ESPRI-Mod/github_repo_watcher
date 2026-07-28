@@ -58,8 +58,6 @@ class TermSkip:
 # JSON-LD structural keys to skip when discovering term fields from context
 _JSONLD_STRUCTURAL_KEYS = {"@base", "@vocab", "id", "type"}
 
-# Fields that get empty string defaults instead of null
-_STRING_DEFAULT_FIELDS = {"description", "drs_name", "name"}
 
 
 def detect_collection_mapping(project_repo: Path) -> dict[str, str]:
@@ -123,7 +121,7 @@ def _build_universe_skeleton(universe_repo: Path, descriptor: str, term_id: str)
             result[key] = []
         elif isinstance(value, dict):
             result[key] = {}
-        elif key in _STRING_DEFAULT_FIELDS:
+        elif isinstance(value, str):
             result[key] = ""
         else:
             result[key] = None
