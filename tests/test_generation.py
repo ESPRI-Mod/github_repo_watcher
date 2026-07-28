@@ -108,6 +108,7 @@ def test_generate_creates_new_term(tmp_path):
         missing_terms=missing,
         universe_repo=universe,
         project_repos=[project_repo],
+        project_name="cmip7",
         universe_type_overrides={"source": "model"},
     )
     assert len(report.universe_to_create) == 1
@@ -124,6 +125,7 @@ def test_generate_skips_existing_term(tmp_path):
         missing_terms=missing,
         universe_repo=universe,
         project_repos=[project_repo],
+        project_name="cmip7",
         universe_type_overrides={"source": "model"},
     )
     assert len(report.universe_to_create) == 0
@@ -141,6 +143,7 @@ def test_generate_detects_updates(tmp_path):
         missing_terms=missing,
         universe_repo=universe,
         project_repos=[project_repo],
+        project_name="cmip7",
         universe_type_overrides={"source": "model"},
         update_terms=update_terms,
     )

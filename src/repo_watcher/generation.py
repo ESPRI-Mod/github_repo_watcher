@@ -428,6 +428,7 @@ def generate_missing_terms(
     missing_terms: set[Term],
     universe_repo: Path,
     project_repos: list[Path],
+    project_name: str,
     universe_type_overrides: dict[str, str] | None = None,
     generation_defaults: dict[str, dict[str, Any]] | None = None,
     term_overrides: dict[str, dict[str, TermOverrideConfig]] | None = None,
@@ -585,9 +586,12 @@ def generate_missing_terms(
                 if field_name in skeleton:
                     skeleton[field_name] = value
             # Pre-populate from source community CV data (e.g. label, release_year)
+            import esgvoc.api as ev
+
             if source_prefill and source_term_data and term.collection in source_prefill:
                 field_map = source_prefill[term.collection]
                 cv_data = source_term_data.get(term.collection, {}).get(term.name, {})
+                planned_ids = {tf.term_id for tf in report.universe_to_create}
                 for src_field, target_field in field_map.items():
                     if src_field not in cv_data:
                         continue
@@ -595,32 +599,25 @@ def generate_missing_terms(
                     # Lowercase string values (esgvoc IDs are always lowercase)
                     if isinstance(value, str):
                         value = value.lower()
+                    # Wrap scalar into list when target expects a list
+                    target_is_list = (target_field in skeleton and isinstance(skeleton[target_field], list))
+                    if target_is_list and not isinstance(value, list):
+                        value = [value]
+                    # Validate list values as IDs: each must exist in the
+                    # project's collection in the registry, or be planned
+                    # for creation in this same generation run.
+                    if isinstance(value, list):
+                        value = [
+                            v for v in value
+                            if ev.get_term_in_collection(project_name, target_field, v) is not None
+                            or v in planned_ids
+                        ]
                     if target_field in skeleton:
-                        # Wrap scalar into list when target expects a list
-                        if isinstance(skeleton[target_field], list) and not isinstance(value, list):
-                            value = [value]
-                        # Validate cross-referenced IDs: fields ending in _id
-                        # must reference terms that exist in the universe or are
-                        # planned for creation in this same generation run.
-                        if target_field.endswith("_id") and isinstance(value, list):
-                            ref_collection = target_field.removesuffix("_id")
-                            ref_dir = universe_repo / ref_collection
-                            if ref_dir.is_dir():
-                                planned = {
-                                    tf.term_id
-                                    for tf in report.universe_to_create
-                                    if tf.descriptor == ref_collection
-                                }
-                                value = [
-                                    v for v in value
-                                    if (ref_dir / f"{v}.json").exists() or v in planned
-                                ]
-                            if not value:
-                                value = []
                         skeleton[target_field] = value
                     else:
                         # Field not in universe skeleton — add to project link
-                        project_extra_fields[target_field] = value
+                        if value:
+                            project_extra_fields[target_field] = value
             # Apply generation defaults for fields still null/empty
             if generation_defaults and term.collection in generation_defaults:
                 for field_name, default_value in generation_defaults[term.collection].items():
@@ -904,6 +901,7 @@ def collect_and_generate(
         missing_terms=all_missing,
         universe_repo=universe_repo,
         project_repos=project_repo_paths,
+        project_name=project_name,
         universe_type_overrides=type_mapping or None,
         generation_defaults=merged_generation_defaults or None,
         term_overrides=merged_term_overrides or None,
