@@ -604,13 +604,20 @@ def generate_missing_terms(
                     if target_is_list and not isinstance(value, list):
                         value = [value]
                     # Validate list values as IDs: each must exist in the
-                    # project's collection in the registry, or be planned
-                    # for creation in this same generation run.
+                    # project collection (registry), in the universe repo
+                    # on disk, or be planned for creation in this run.
                     if isinstance(value, list):
+                        # Resolve universe descriptor for disk check
+                        if target_field.endswith("_id"):
+                            ref_descriptor = target_field.removesuffix("_id")
+                        else:
+                            ref_descriptor = mapping.get(target_field)
+                        ref_dir = universe_repo / ref_descriptor if ref_descriptor else None
                         value = [
                             v for v in value
                             if ev.get_term_in_collection(project_name, target_field, v) is not None
                             or v in planned_ids
+                            or (ref_dir is not None and (ref_dir / f"{v}.json").exists())
                         ]
                     if target_field in skeleton:
                         skeleton[target_field] = value
