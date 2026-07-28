@@ -250,7 +250,18 @@ def _ror_enrich_institution(
             # Without country hint: accept only if the acronym is unambiguous
             match = acronym_matches[0]
 
-    # Strategy 3: affiliation search with acronym (when no description was available)
+    # Strategy 3: affiliation search with composite description (when no per-member description)
+    # The full org description (e.g. "Italian National Research Council, ..., Lecce, Italy")
+    # often contains enough info for ROR to identify individual members by acronym.
+    if match is None and not description and fallback_country_desc:
+        for r in search_affiliation(fallback_country_desc):
+            if r.score >= score_threshold:
+                acronym_ok = drs_name.upper() in [a.upper() for a in r.acronyms]
+                if acronym_ok:
+                    match = r
+                    break
+
+    # Strategy 4: affiliation search with just the acronym as last resort
     if match is None and not description:
         for r in search_affiliation(drs_name):
             if r.score >= score_threshold and r.chosen:
@@ -324,16 +335,22 @@ def _handle_multi_step_term(
         member_descriptions = _parse_member_descriptions(term.name, cv_description, separator or "")
 
     # Step 1: member_descriptor — one file per atomic member
+    # Track which members are valid (exist or created as member_descriptor type).
+    # Members that exist as a different type (e.g. "clmcom" as organisation/)
+    # are excluded from the group's members list.
+    valid_members: list[str] = []
     member_dir = universe_repo / member_descriptor
     if member_dir.is_dir():
         for member_id in members:
             key = (member_descriptor, member_id)
             if key in seen_members:
+                valid_members.append(member_id)
                 continue
             seen_members.add(key)
             member_file = member_dir / f"{member_id}.json"
             if member_file.exists():
                 report.universe_existed.append(TermRef(member_descriptor, member_id))
+                valid_members.append(member_id)
             else:
                 # Check if the member already exists under a different universe type
                 # (e.g. "clmcom" exists as organisation/, not institution/)
@@ -346,6 +363,7 @@ def _handle_multi_step_term(
                         found_elsewhere = True
                         break
                 if found_elsewhere:
+                    # Not a valid member_descriptor entity — skip for members list
                     continue
                 skeleton = _build_universe_skeleton(universe_repo, member_descriptor, member_id)
                 # ROR enrichment for institution members
@@ -358,12 +376,11 @@ def _handle_multi_step_term(
                             if part.lower() == member_id:
                                 drs_name = part
                                 break
-                    # Fall back to composite description for country hint
-                    fallback_desc = cv_description if not member_desc else None
                     _ror_enrich_institution(
-                        skeleton, member_id, member_desc, drs_name, fallback_country_desc=fallback_desc
+                        skeleton, member_id, member_desc, drs_name, fallback_country_desc=cv_description
                     )
                 report.universe_to_create.append(TermFile(member_descriptor, member_id, skeleton))
+                valid_members.append(member_id)
 
     # Step 2: group_descriptor — one file for the full term
     group_dir = universe_repo / group_descriptor
@@ -373,9 +390,9 @@ def _handle_multi_step_term(
             # Check if existing organisation needs new members added
             existing = json.loads(group_file.read_text())
             existing_members = set(existing.get("members", []))
-            new_members = [m for m in members if m not in existing_members]
+            new_members = [m for m in valid_members if m not in existing_members]
             if new_members:
-                merged = sorted(existing_members | set(members))
+                merged = sorted(existing_members | set(valid_members))
                 report.universe_to_update.append(
                     FieldChange(group_descriptor, term_id, {"members": (list(existing_members), merged)})
                 )
@@ -383,7 +400,7 @@ def _handle_multi_step_term(
                 report.universe_existed.append(TermRef(group_descriptor, term_id))
         else:
             skeleton = _build_universe_skeleton(universe_repo, group_descriptor, term_id)
-            skeleton["members"] = members
+            skeleton["members"] = valid_members
             if cv_description and "description" in skeleton:
                 skeleton["description"] = cv_description
             if "drs_name" in skeleton:
