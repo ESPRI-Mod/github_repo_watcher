@@ -560,6 +560,9 @@ def generate_missing_terms(
             )
             continue
 
+        # Extra fields from source_prefill that don't fit universe skeleton → project link
+        project_extra_fields: dict[str, object] = {}
+
         # Check universe
         universe_term_file = universe_repo / descriptor / f"{term_id}.json"
         term_update_key = (term.collection, term.name)
@@ -586,11 +589,13 @@ def generate_missing_terms(
                 field_map = source_prefill[term.collection]
                 cv_data = source_term_data.get(term.collection, {}).get(term.name, {})
                 for src_field, target_field in field_map.items():
-                    if src_field in cv_data and target_field in skeleton:
-                        value = cv_data[src_field]
-                        # Lowercase string values (esgvoc IDs are always lowercase)
-                        if isinstance(value, str):
-                            value = value.lower()
+                    if src_field not in cv_data:
+                        continue
+                    value = cv_data[src_field]
+                    # Lowercase string values (esgvoc IDs are always lowercase)
+                    if isinstance(value, str):
+                        value = value.lower()
+                    if target_field in skeleton:
                         # Wrap scalar into list when target expects a list
                         if isinstance(skeleton[target_field], list) and not isinstance(value, list):
                             value = [value]
@@ -613,10 +618,13 @@ def generate_missing_terms(
                             if not value:
                                 value = []
                         skeleton[target_field] = value
+                    else:
+                        # Field not in universe skeleton — add to project link
+                        project_extra_fields[target_field] = value
             # Apply generation defaults for fields still null/empty
             if generation_defaults and term.collection in generation_defaults:
                 for field_name, default_value in generation_defaults[term.collection].items():
-                    if field_name in skeleton and skeleton[field_name] is None:
+                    if field_name in skeleton and not skeleton[field_name]:
                         skeleton[field_name] = default_value
             report.universe_to_create.append(TermFile(descriptor, term_id, skeleton))
 
@@ -635,6 +643,8 @@ def generate_missing_terms(
                 break
         if not found_in_project and has_collection_dir:
             link = _build_project_link(descriptor, term_id)
+            if project_extra_fields:
+                link.update(project_extra_fields)
             report.project_to_create.append(TermFile(term.collection, term_id, link))
 
     return report
