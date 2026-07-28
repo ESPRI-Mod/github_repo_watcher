@@ -489,6 +489,16 @@ def generate_missing_terms(
         # with project-specific regex, or variant_label with a config-defined ID)
         collection_overrides = term_overrides.get(term.collection) if term_overrides else None
         if collection_overrides and term.name in collection_overrides:
+            pass  # handled below
+        elif "/" in term_id:
+            # Term ID contains path separators — cannot be used as a filename.
+            # This typically means a term_override is missing for this term.
+            report.skipped.append(
+                TermSkip(term.collection, term.name, "term ID contains '/' (missing term_override?)")
+            )
+            continue
+
+        if collection_overrides and term.name in collection_overrides:
             override_cfg = collection_overrides[term.name]
             override_id = override_cfg["universe_term"]
             override_fields = override_cfg.get("fields", {})

@@ -95,6 +95,12 @@ checks:
       nominal_resolution:
         - pattern: " "
           replace: ""
+    term_overrides:
+      tracking_id:
+        "hdl:21.14100/.*":
+          universe_term: prefuuid
+          fields:
+            regex: "^hdl:21\\.14100/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"
 
   # ──────────────────────────────────────────────────────────
   # CMIP6: esgvoc branch vs registry
@@ -193,6 +199,12 @@ checks:
       type: registry
       project: input4mips
     project: input4mips
+    term_overrides:
+      tracking_id:
+        "hdl:21.14100/.*":
+          universe_term: prefuuid
+          fields:
+            regex: "^hdl:21\\.14100/[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$"
 
   # ──────────────────────────────────────────────────────────
   # input4MIPs: esgvoc branch vs registry
