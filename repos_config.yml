@@ -96,6 +96,32 @@ checks:
         - pattern: " "
           replace: ""
 
+  # ──────────────────────────────────────────────────────────
+  # CMIP6: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: cmip6-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6_CVs
+      branch: esgvoc
+    reference:
+      type: registry
+      project: cmip6
+    project: cmip6
+
+  - name: cmip6-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: WCRP-CMIP
+      repo: CMIP6_CVs
+      branch: esgvoc_dev
+    reference:
+      type: registry
+      project: cmip6
+    project: cmip6
+
   - name: cmip6plus-consistency
     source:
       type: git
@@ -163,6 +189,32 @@ checks:
       branch: main
       cv_subdir: CVs
       cv_format: input4mips
+    reference:
+      type: registry
+      project: input4mips
+    project: input4mips
+
+  # ──────────────────────────────────────────────────────────
+  # input4MIPs: esgvoc branch vs registry
+  # ──────────────────────────────────────────────────────────
+
+  - name: input4mips-esgvoc-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: PCMDI
+      repo: input4MIPs_CVs
+      branch: esgvoc
+    reference:
+      type: registry
+      project: input4mips
+    project: input4mips
+
+  - name: input4mips-esgvoc-dev-vs-registry
+    source:
+      type: git_esgvoc_format
+      owner: PCMDI
+      repo: input4MIPs_CVs
+      branch: esgvoc_dev
     reference:
       type: registry
       project: input4mips

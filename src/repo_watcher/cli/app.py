@@ -12,6 +12,7 @@ warnings.filterwarnings(
 )
 warnings.filterwarnings("ignore", message="EMD Conformance:", category=UserWarning, module="pydantic")
 
+import json
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -290,6 +291,26 @@ def git_vs_registry(
         collection_mappings=mappings,
     )
     _run_check(check_cfg, mode=mode)
+
+
+@app.command()
+def list_projects(
+    config: Annotated[Path, typer.Option(help="Path to config file.")] = Path("repos_config.yml"),
+) -> None:
+    """List distinct projects with their repo info as JSON (for CI matrix)."""
+    checks = _load_checks(config)
+    seen: dict[str, dict] = {}
+    for c in checks:
+        if c.project in seen:
+            continue
+        src = c.source
+        if "owner" in src:
+            seen[c.project] = {
+                "project": c.project,
+                "owner": src["owner"],
+                "repo": src["repo"],
+            }
+    typer.echo(json.dumps(list(seen.values())))
 
 
 if __name__ == "__main__":
