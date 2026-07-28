@@ -38,7 +38,7 @@ def test_validate_typing_cmip6plus_allows_str_value():
 
 def test_validate_typing_input4mip_accepts_list():
     data = '["input4MIPs", "CMIP"]'
-    result = validate_typing(data, "input4mip")
+    result = validate_typing(data, "input4mip", cv_format="input4mips")
     assert "input4MIPs" in result
 
 
@@ -87,13 +87,13 @@ def test_cmip6plus_extracts_dict_and_str_terms():
 
 
 def test_input4mip_extracts_from_cvs_subdir():
-    terms = extract_terms(FIXTURES / "input4mip" / "CVs", project="input4mip")
+    terms = extract_terms(FIXTURES / "input4mip" / "CVs", project="input4mip", cv_format="input4mips")
     assert Term(name="input4MIPs", collection="activity_id") in terms
     assert Term(name="CMIP", collection="activity_id") in terms
 
 
 def test_input4mip_target_mip():
-    terms = extract_terms(FIXTURES / "input4mip" / "CVs", project="input4mip")
+    terms = extract_terms(FIXTURES / "input4mip" / "CVs", project="input4mip", cv_format="input4mips")
     assert Term(name="AerChemMIP", collection="target_mip") in terms
     assert Term(name="CMIP", collection="target_mip") in terms
 
