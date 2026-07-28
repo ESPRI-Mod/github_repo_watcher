@@ -234,11 +234,28 @@ def _ror_enrich_institution(
                     match = r
                     break
 
-    # Strategy 2: query search by acronym — only with country confirmation
+    # Strategy 2: query search by acronym
     if match is None:
-        for r in search_query(drs_name)[:5]:
-            if drs_name.upper() in [a.upper() for a in r.acronyms]:
-                if country_hint and _country_matches(r.country, country_hint):
+        acronym_matches = [
+            r for r in search_query(drs_name)[:5]
+            if drs_name.upper() in [a.upper() for a in r.acronyms]
+        ]
+        if country_hint:
+            # With country hint: require country confirmation
+            for r in acronym_matches:
+                if _country_matches(r.country, country_hint):
+                    match = r
+                    break
+        elif len(acronym_matches) == 1:
+            # Without country hint: accept only if the acronym is unambiguous
+            match = acronym_matches[0]
+
+    # Strategy 3: affiliation search with acronym (when no description was available)
+    if match is None and not description:
+        for r in search_affiliation(drs_name):
+            if r.score >= score_threshold and r.chosen:
+                acronym_ok = drs_name.upper() in [a.upper() for a in r.acronyms]
+                if acronym_ok:
                     match = r
                     break
 
@@ -353,7 +370,17 @@ def _handle_multi_step_term(
     if group_dir.is_dir():
         group_file = group_dir / f"{term_id}.json"
         if group_file.exists():
-            report.universe_existed.append(TermRef(group_descriptor, term_id))
+            # Check if existing organisation needs new members added
+            existing = json.loads(group_file.read_text())
+            existing_members = set(existing.get("members", []))
+            new_members = [m for m in members if m not in existing_members]
+            if new_members:
+                merged = sorted(existing_members | set(members))
+                report.universe_to_update.append(
+                    FieldChange(group_descriptor, term_id, {"members": (list(existing_members), merged)})
+                )
+            else:
+                report.universe_existed.append(TermRef(group_descriptor, term_id))
         else:
             skeleton = _build_universe_skeleton(universe_repo, group_descriptor, term_id)
             skeleton["members"] = members
