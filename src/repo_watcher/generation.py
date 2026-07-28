@@ -587,7 +587,32 @@ def generate_missing_terms(
                 cv_data = source_term_data.get(term.collection, {}).get(term.name, {})
                 for src_field, target_field in field_map.items():
                     if src_field in cv_data and target_field in skeleton:
-                        skeleton[target_field] = cv_data[src_field]
+                        value = cv_data[src_field]
+                        # Lowercase string values (esgvoc IDs are always lowercase)
+                        if isinstance(value, str):
+                            value = value.lower()
+                        # Wrap scalar into list when target expects a list
+                        if isinstance(skeleton[target_field], list) and not isinstance(value, list):
+                            value = [value]
+                        # Validate cross-referenced IDs: fields ending in _id
+                        # must reference terms that exist in the universe or are
+                        # planned for creation in this same generation run.
+                        if target_field.endswith("_id") and isinstance(value, list):
+                            ref_collection = target_field.removesuffix("_id")
+                            ref_dir = universe_repo / ref_collection
+                            if ref_dir.is_dir():
+                                planned = {
+                                    tf.term_id
+                                    for tf in report.universe_to_create
+                                    if tf.descriptor == ref_collection
+                                }
+                                value = [
+                                    v for v in value
+                                    if (ref_dir / f"{v}.json").exists() or v in planned
+                                ]
+                            if not value:
+                                value = []
+                        skeleton[target_field] = value
             # Apply generation defaults for fields still null/empty
             if generation_defaults and term.collection in generation_defaults:
                 for field_name, default_value in generation_defaults[term.collection].items():
