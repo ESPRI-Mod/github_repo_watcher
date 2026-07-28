@@ -201,6 +201,9 @@ checks:
     project: input4mips
     skip_collections:
       - license
+    exclude_terms:
+      activity_id:
+        - "^input4mip$"
     term_overrides:
       tracking_id:
         "hdl:21.14100/.*":
