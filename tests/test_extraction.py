@@ -1,11 +1,11 @@
-"""Tests for extraction.py — pure parsing, no network."""
+"""Tests for extraction — pure parsing, no network."""
 
 from pathlib import Path
 
 import pytest
 
 from repo_watcher.extraction import extract_terms, validate_typing
-from repo_watcher.models import Term
+from repo_watcher.domain import Term
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

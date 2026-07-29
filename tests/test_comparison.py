@@ -1,7 +1,7 @@
 """Tests for comparison.py — pure set operations, no network."""
 
 from repo_watcher.comparison import compare_terms, identify_field_updates
-from repo_watcher.models import ReportMode, Term
+from repo_watcher.domain import ReportMode, Term
 
 
 def test_identical_sets():

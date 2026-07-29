@@ -51,7 +51,7 @@ if __name__ == "__main__":
 
     code = flow.from_source(
         git_storage,
-        entrypoint="src/repo_watcher/orchestration.py:check_consistency",
+        entrypoint="src/repo_watcher/orchestration/flows.py:check_consistency",
     )
 
     for check in checks:
