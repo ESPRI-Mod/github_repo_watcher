@@ -636,6 +636,12 @@ def generate_missing_terms(
                     if src_field not in cv_data:
                         continue
                     value = cv_data[src_field]
+                    if value is None:
+                        continue
+                    # Skip when skeleton expects a dict but CV provides a scalar
+                    # (e.g. license is a structured object in universe, plain string in CVs)
+                    if target_field in skeleton and isinstance(skeleton[target_field], dict) and not isinstance(value, dict):
+                        continue
                     # Determine if this field is a cross-reference using:
                     # 1. Universe context (@type: @id with @base)
                     # 2. Project collection context (@base in <field>/000_context.jsonld)
