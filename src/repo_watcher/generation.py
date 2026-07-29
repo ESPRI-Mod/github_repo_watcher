@@ -154,10 +154,6 @@ def _build_universe_skeleton(universe_repo: Path, descriptor: str, term_id: str)
         else:
             result[key] = None
 
-    # drs_name defaults to term_id (standard esgvoc convention)
-    if "drs_name" in result and not result["drs_name"]:
-        result["drs_name"] = term_id
-
     return result
 
 

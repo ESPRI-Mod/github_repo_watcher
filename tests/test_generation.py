@@ -75,7 +75,7 @@ def test_build_universe_skeleton_samples_existing_term(tmp_path):
     skeleton = _build_universe_skeleton(universe, "model", "new_model")
     assert skeleton["id"] == "new_model"
     assert skeleton["description"] == ""
-    assert skeleton["drs_name"] == "new_model"
+    assert skeleton["drs_name"] == ""
     assert skeleton["labels"] == []
 
 
