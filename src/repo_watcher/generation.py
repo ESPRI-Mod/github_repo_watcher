@@ -612,7 +612,17 @@ def generate_missing_terms(
             # Pre-populate from source community CV data
             import esgvoc.api as ev
 
-            cv_data = (source_term_data or {}).get(term.collection, {}).get(term.name, {})
+            cv_collection = (source_term_data or {}).get(term.collection, {})
+            cv_data = cv_collection.get(term.name, {})
+            cv_original_key: str | None = term.name if cv_data else None
+            # Case-insensitive fallback: CV keys may have mixed case (e.g. "tipmip-ocn-p1t1-Aa")
+            # while esgvoc IDs are lowercase. The original-case key is the drs_name.
+            if not cv_data:
+                for cv_key in cv_collection:
+                    if cv_key.lower() == term.name.lower():
+                        cv_data = cv_collection[cv_key]
+                        cv_original_key = cv_key
+                        break
             if cv_data:
                 planned_ids = {tf.term_id for tf in report.universe_to_create}
                 # Build field mapping: auto-match + explicit renames
@@ -681,6 +691,9 @@ def generate_missing_terms(
                         if isinstance(value, list) and not value:
                             continue
                         project_extra_fields[target_field] = value
+                # Set drs_name from original-case CV key when not already filled
+                if cv_original_key and "drs_name" in skeleton and not skeleton["drs_name"]:
+                    skeleton["drs_name"] = cv_original_key
             # Apply generation defaults for fields still null/empty
             if generation_defaults and term.collection in generation_defaults:
                 for field_name, default_value in generation_defaults[term.collection].items():
