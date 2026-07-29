@@ -60,6 +60,34 @@ _JSONLD_STRUCTURAL_KEYS = {"@base", "@vocab", "id", "type"}
 
 
 
+def detect_field_references(universe_repo: Path, descriptor: str) -> dict[str, str]:
+    """Parse a universe descriptor's 000_context.jsonld to find fields that are cross-references.
+
+    Returns e.g. {"activity": "activity", "required_model_components": "source_type"}.
+    Only fields with "@type": "@id" and a nested @base URL are included.
+    """
+    context_file = universe_repo / descriptor / CONTEXT_FILENAME
+    if not context_file.exists():
+        return {}
+    try:
+        data = json.loads(context_file.read_text())
+    except json.JSONDecodeError:
+        return {}
+    context = data.get("@context", {})
+    refs: dict[str, str] = {}
+    for field, spec in context.items():
+        if not isinstance(spec, dict):
+            continue
+        if spec.get("@type") != "@id":
+            continue
+        nested = spec.get("@context", {})
+        base_url = nested.get("@base", "")
+        if base_url:
+            ref_collection = base_url.rstrip("/").rsplit("/", 1)[-1]
+            refs[field] = ref_collection
+    return refs
+
+
 def detect_collection_mapping(project_repo: Path) -> dict[str, str]:
     """Parse @base URLs from project 000_context.jsonld files to build collection->universe mapping.
 
@@ -578,38 +606,65 @@ def generate_missing_terms(
                 )
                 continue
             skeleton = _build_universe_skeleton(universe_repo, descriptor, term_id)
+            # Field cross-reference mapping from universe context
+            field_refs = detect_field_references(universe_repo, descriptor)
             # Pre-populate with known values from field-level terms (e.g. EMD)
             field_values = known_values.get((term.collection, term.name), {})
             for field_name, value in field_values.items():
                 if field_name in skeleton:
                     skeleton[field_name] = value
-            # Pre-populate from source community CV data (e.g. label, release_year)
+            # Pre-populate from source community CV data
             import esgvoc.api as ev
 
-            if source_prefill and source_term_data and term.collection in source_prefill:
-                field_map = source_prefill[term.collection]
-                cv_data = source_term_data.get(term.collection, {}).get(term.name, {})
+            cv_data = (source_term_data or {}).get(term.collection, {}).get(term.name, {})
+            if cv_data:
                 planned_ids = {tf.term_id for tf in report.universe_to_create}
-                for src_field, target_field in field_map.items():
+                # Build field mapping: auto-match + explicit renames
+                field_pairs: list[tuple[str, str]] = []
+                # Auto-match: CV fields that exist in skeleton or in universe context
+                for cv_field in cv_data:
+                    if cv_field.startswith("_"):
+                        continue
+                    if cv_field in skeleton or cv_field in field_refs:
+                        field_pairs.append((cv_field, cv_field))
+                # Explicit renames from source_prefill config
+                if source_prefill and term.collection in source_prefill:
+                    for src_field, target_field in source_prefill[term.collection].items():
+                        field_pairs.append((src_field, target_field))
+
+                for src_field, target_field in field_pairs:
                     if src_field not in cv_data:
                         continue
                     value = cv_data[src_field]
-                    # Lowercase string values (esgvoc IDs are always lowercase)
-                    if isinstance(value, str):
-                        value = value.lower()
+                    # Determine if this field is a cross-reference using:
+                    # 1. Universe context (@type: @id with @base)
+                    # 2. Project collection context (@base in <field>/000_context.jsonld)
+                    # 3. Universe context for base field (e.g. parent_activity for parent_activity_id)
+                    ref_descriptor = field_refs.get(target_field)
+                    if ref_descriptor is None and target_field in mapping:
+                        ref_descriptor = mapping[target_field]
+                    if ref_descriptor is None and target_field.endswith("_id"):
+                        base_field = target_field.removesuffix("_id")
+                        ref_descriptor = field_refs.get(base_field)
+                        # Also check if base_field is a referenced collection
+                        # (e.g. organisation_id → organisation is a target of contributors)
+                        if ref_descriptor is None and base_field in field_refs.values():
+                            ref_descriptor = base_field
+                    is_id_field = ref_descriptor is not None
+                    # Lowercase only ID references (not descriptions, labels, etc.)
+                    if is_id_field:
+                        if isinstance(value, str):
+                            value = value.lower()
+                        elif isinstance(value, list):
+                            value = [v.lower() if isinstance(v, str) else v for v in value]
                     # Wrap scalar into list when target expects a list
                     target_is_list = (target_field in skeleton and isinstance(skeleton[target_field], list))
                     if target_is_list and not isinstance(value, list):
                         value = [value]
-                    # Validate list values as IDs: each must exist in the
+                    # Validate list ID values: each must exist in the
                     # project collection (registry), in the universe repo
                     # on disk, or be planned for creation in this run.
-                    if isinstance(value, list):
-                        # Resolve universe descriptor for disk check
-                        if target_field.endswith("_id"):
-                            ref_descriptor = target_field.removesuffix("_id")
-                        else:
-                            ref_descriptor = mapping.get(target_field)
+                    if is_id_field and isinstance(value, list):
                         ref_dir = universe_repo / ref_descriptor if ref_descriptor else None
                         value = [
                             v for v in value
@@ -621,8 +676,9 @@ def generate_missing_terms(
                         skeleton[target_field] = value
                     else:
                         # Field not in universe skeleton — add to project link
-                        if value:
-                            project_extra_fields[target_field] = value
+                        if isinstance(value, list) and not value:
+                            continue
+                        project_extra_fields[target_field] = value
             # Apply generation defaults for fields still null/empty
             if generation_defaults and term.collection in generation_defaults:
                 for field_name, default_value in generation_defaults[term.collection].items():
@@ -887,9 +943,10 @@ def collect_and_generate(
     if not all_missing and not update_terms:
         return GenerationReport()
 
-    # Extract source term data for prefill
+    # Extract source term data for prefill (auto + configured renames)
     source_term_data: dict[str, dict[str, dict]] = {}
-    extract_collections: set[str] = set(merged_source_prefill.keys())
+    extract_collections: set[str] = {t.collection for t in all_missing}
+    extract_collections.update(merged_source_prefill.keys())
     extract_collections.update(merged_multi_step_terms.keys())
     if extract_collections:
         for chk, repo_path in source_check_repos:
