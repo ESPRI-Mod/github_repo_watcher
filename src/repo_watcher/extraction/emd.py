@@ -42,8 +42,14 @@ def extract_terms_emd(
 
             # Skip computational grids: output grids have a single
             # region while computational grids list multiple regions.
+            # Multiple regions appear either as multiple list items
+            # (e.g. ["greenland", "antarctica"]) or as a comma-separated
+            # string in a single item (e.g. ["greenland, antarctica"]).
             region = data.get("region")
-            if isinstance(region, list) and len(region) > 1:
+            if isinstance(region, list) and (
+                len(region) > 1
+                or (len(region) == 1 and "," in str(region[0]))
+            ):
                 logger.info("Skipping computational grid %s (multi-region)", term_id)
                 continue
 
