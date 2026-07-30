@@ -18,17 +18,45 @@ Automatically detects when a git branch of a controlled vocabulary (CV) repo div
 
 ## Architecture
 
-The codebase follows a 5-layer architecture with clear separation of concerns:
+The codebase is organized into self-documenting packages under `src/repo_watcher/`:
 
 ```
-Layer 1 — Sources    (sources.py)       Fetch terms from git repos or esgvoc registry
-Layer 2 — Extraction (extraction.py)    Parse JSON CVs into standardized Term objects
-Layer 3 — Comparison (comparison.py)    Pure set operations to find diffs
-Layer 4 — Orchestration (orchestration.py)  Prefect flows + NocoDB integration
-Layer 5 — Generation (generation.py)    Scaffold missing JSON files
+repo_watcher/
+├── domain.py              Core data types (Term, ReportMode, ConsistencyResult)
+├── comparison.py          Pure set operations to find diffs
+├── config/                Configuration schema and YAML loading
+│   ├── schema.py          Dataclass definitions (CheckConfig, SourceConfig, …)
+│   └── loader.py          Load and merge checks from repos_config.yml
+├── sources/               Fetch terms from git repos or esgvoc registry
+│   ├── base.py            TermSource protocol
+│   ├── cloner.py          Shallow-clone helper
+│   ├── git.py             GitSource (legacy JSON, esgvoc-format, EMD)
+│   └── registry.py        EsgvocRegistrySource (API queries)
+├── extraction/            Parse CV files into Term objects
+│   ├── standard.py        Legacy JSON CVs (CMIP6, CMIP6Plus, input4MIPs, CORDEX)
+│   ├── esgvoc_format.py   esgvoc directory layout (one JSON per term)
+│   ├── emd.py             EMD field-level extraction
+│   ├── formats.py         Format detection and typing validation
+│   └── term_data.py       Extract raw term data for generation prefill
+├── generation/            Scaffold missing JSON files
+│   ├── pipeline.py        Top-level collect_and_generate entry point
+│   ├── planner.py         Decide what to generate (universe vs project)
+│   ├── skeleton.py        Build universe and project-link JSON skeletons
+│   ├── enrichment.py      Enrich skeletons with CV data and defaults
+│   ├── prefill.py         Auto-prefill from source CV fields
+│   ├── context.py         Detect collection mappings from 000_context.jsonld
+│   ├── multi_step.py      Composite terms (e.g. institution_id → institution + organisation)
+│   ├── report.py          GenerationReport data model
+│   └── writer.py          Write report to disk as JSON
+├── orchestration/         Prefect flows and NocoDB reporting
+│   ├── flows.py           check_consistency Prefect flow
+│   └── nocodb.py          NocoDB API client
+├── cli/                   Typer CLI application
+│   └── app.py             Commands: check, project, generate-missing, …
+└── ror.py                 ROR API lookups for institution metadata
 ```
 
-The core data model is a frozen `Term` dataclass (`models.py`) with case-insensitive equality, enabling set-based comparison.
+The core data model is a frozen `Term` dataclass (`domain.py`) with case-insensitive equality, enabling set-based comparison.
 
 ## Installation
 
