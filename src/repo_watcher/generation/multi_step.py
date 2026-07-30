@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from repo_watcher.config.schema import MultiStepConfig
 from repo_watcher.domain import Term
@@ -45,10 +48,21 @@ def handle_multi_step_term(
         member_descriptions = parse_member_descriptions(term.name, cv_description, separator or "")
 
     # Step 1: member_descriptor — one file per atomic member
+    # Members that already exist as a group_descriptor (e.g. an organisation)
+    # are consortia, not institutions — skip them entirely.
+    group_dir = universe_repo / group_descriptor
     valid_members: list[str] = []
     member_dir = universe_repo / member_descriptor
     if member_dir.is_dir():
         for member_id in members:
+            # A member that is itself a group (e.g. CLMcom is an
+            # organisation) should not be registered as an institution.
+            if group_dir.is_dir() and (group_dir / f"{member_id}.json").exists():
+                logger.info(
+                    "Skipping %s as %s member — it is a %s",
+                    member_id, member_descriptor, group_descriptor,
+                )
+                continue
             key = (member_descriptor, member_id)
             if key in seen_members:
                 valid_members.append(member_id)
@@ -59,17 +73,6 @@ def handle_multi_step_term(
                 report.universe_existed.append(TermRef(member_descriptor, member_id))
                 valid_members.append(member_id)
             else:
-                # Check if the member already exists under a different universe type
-                found_elsewhere = False
-                for other_dir in universe_repo.iterdir():
-                    if not other_dir.is_dir() or other_dir.name == member_descriptor:
-                        continue
-                    if (other_dir / f"{member_id}.json").exists():
-                        report.universe_existed.append(TermRef(other_dir.name, member_id))
-                        found_elsewhere = True
-                        break
-                if found_elsewhere:
-                    continue
                 skeleton = build_universe_skeleton(universe_repo, member_descriptor, member_id)
                 # ROR enrichment for institution members
                 if member_descriptor == "institution":
@@ -87,7 +90,6 @@ def handle_multi_step_term(
                 valid_members.append(member_id)
 
     # Step 2: group_descriptor — one file for the full term
-    group_dir = universe_repo / group_descriptor
     if group_dir.is_dir():
         group_file = group_dir / f"{term_id}.json"
         if group_file.exists():
