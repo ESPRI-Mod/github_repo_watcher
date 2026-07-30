@@ -1,23 +1,21 @@
-"""Tests for generation.py — skeleton building, reporting, and file writing."""
+"""Tests for generation — skeleton building, reporting, and file writing."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from repo_watcher.generation import (
+from repo_watcher.domain import Term
+from repo_watcher.generation.context import detect_collection_mapping
+from repo_watcher.generation.planner import generate_missing_terms
+from repo_watcher.generation.report import (
     FieldChange,
     GenerationReport,
     TermFile,
-    TermRef,
     TermSkip,
-    _build_project_link,
-    _build_universe_skeleton,
-    detect_collection_mapping,
-    generate_missing_terms,
-    write_report,
 )
-from repo_watcher.models import Term
+from repo_watcher.generation.skeleton import build_project_link, build_universe_skeleton
+from repo_watcher.generation.writer import write_report
 
 
 def _make_universe(tmp_path: Path, descriptor: str, terms: dict[str, dict] | None = None) -> Path:
@@ -43,20 +41,20 @@ def _make_project_repo(tmp_path: Path, collection: str, terms: list[str] | None 
     return tmp_path / "project"
 
 
-# ── _build_project_link ────────────────────────────────────
+# ── build_project_link ────────────────────────────────────
 
 
 def test_build_project_link_has_three_fields():
-    link = _build_project_link("source", "my_model")
+    link = build_project_link("source", "my_model")
     assert link == {"@context": "000_context.jsonld", "id": "my_model", "type": "source"}
 
 
-# ── _build_universe_skeleton ───────────────────────────────
+# ── build_universe_skeleton ───────────────────────────────
 
 
 def test_build_universe_skeleton_no_existing_terms(tmp_path):
     universe = _make_universe(tmp_path, "model")
-    skeleton = _build_universe_skeleton(universe, "model", "test_model")
+    skeleton = build_universe_skeleton(universe, "model", "test_model")
     assert skeleton["id"] == "test_model"
     assert skeleton["type"] == "model"
     assert skeleton["@context"] == "000_context.jsonld"
@@ -72,7 +70,7 @@ def test_build_universe_skeleton_samples_existing_term(tmp_path):
         "labels": ["existing"],
     }
     universe = _make_universe(tmp_path, "model", {"existing": existing})
-    skeleton = _build_universe_skeleton(universe, "model", "new_model")
+    skeleton = build_universe_skeleton(universe, "model", "new_model")
     assert skeleton["id"] == "new_model"
     assert skeleton["description"] == ""
     assert skeleton["drs_name"] == ""  # no default — must come from CV/EMD data

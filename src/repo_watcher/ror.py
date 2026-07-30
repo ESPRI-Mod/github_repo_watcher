@@ -15,6 +15,10 @@ from typing import Any
 
 import requests
 
+# Module-level cache to avoid redundant API calls for the same query.
+_affiliation_cache: dict[str, list[dict]] = {}
+_query_cache: dict[str, list[dict]] = {}
+
 logger = logging.getLogger(__name__)
 
 ROR_API_BASE = "https://api.ror.org/v2/organizations"
@@ -123,7 +127,10 @@ def search_affiliation(query: str, delay: float = REQUEST_DELAY) -> list[RORReco
 
     Best for matching full institution descriptions like
     "Commonwealth Scientific and Industrial Research Organisation, Canberra, Australia".
+    Results are cached per query to avoid redundant API calls.
     """
+    if query in _affiliation_cache:
+        return _parse_items(_affiliation_cache[query], from_affiliation=True)
     if delay > 0:
         time.sleep(delay)
     try:
@@ -132,14 +139,19 @@ def search_affiliation(query: str, delay: float = REQUEST_DELAY) -> list[RORReco
     except requests.RequestException as exc:
         logger.warning("ROR affiliation search error for %r: %s", query, exc)
         return []
-    return _parse_items(resp.json().get("items", []), from_affiliation=True)
+    items = resp.json().get("items", [])
+    _affiliation_cache[query] = items
+    return _parse_items(items, from_affiliation=True)
 
 
 def search_query(query: str, delay: float = REQUEST_DELAY) -> list[RORRecord]:
     """Search ROR using the query endpoint (keyword search on names/acronyms).
 
     Good for acronym-based lookups. Results are not scored.
+    Results are cached per query to avoid redundant API calls.
     """
+    if query in _query_cache:
+        return _parse_items(_query_cache[query], from_affiliation=False)
     if delay > 0:
         time.sleep(delay)
     try:
@@ -148,7 +160,9 @@ def search_query(query: str, delay: float = REQUEST_DELAY) -> list[RORRecord]:
     except requests.RequestException as exc:
         logger.warning("ROR query search error for %r: %s", query, exc)
         return []
-    return _parse_items(resp.json().get("items", []), from_affiliation=False)
+    items = resp.json().get("items", [])
+    _query_cache[query] = items
+    return _parse_items(items, from_affiliation=False)
 
 
 def fetch_by_id(ror_id: str, delay: float = REQUEST_DELAY) -> RORRecord | None:
