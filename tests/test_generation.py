@@ -131,6 +131,45 @@ def test_generate_skips_existing_term(tmp_path):
     assert len(report.project_existed) == 1
 
 
+def test_generate_skips_existing_term_with_different_filename_universe(tmp_path):
+    """A universe term stored under a different filename should still be detected."""
+    # Universe has "creation_date.json" but the term ID inside is "creationdate"
+    existing = {"@context": "000_context.jsonld", "id": "creationdate", "type": "directory_date"}
+    universe = _make_universe(tmp_path, "directory_date")
+    (tmp_path / "universe" / "directory_date" / "creation_date.json").write_text(json.dumps(existing))
+    project_repo = _make_project_repo(tmp_path, "version")
+    missing = {Term(name="creationdate", collection="version")}
+    report = generate_missing_terms(
+        missing_terms=missing,
+        universe_repo=universe,
+        project_repos=[project_repo],
+        project_name="cmip6plus",
+        universe_type_overrides={"version": "directory_date"},
+    )
+    assert len(report.universe_to_create) == 0
+    assert len(report.universe_existed) == 1
+
+
+def test_generate_skips_existing_term_with_different_filename_project(tmp_path):
+    """A project term stored under a different filename should still be detected."""
+    existing_universe = {"@context": "000_context.jsonld", "id": "creationdate", "type": "directory_date"}
+    universe = _make_universe(tmp_path, "directory_date", {"creationdate": existing_universe})
+    project_repo = _make_project_repo(tmp_path, "version")
+    # Project has "creation_date.json" but the term ID inside is "creationdate"
+    project_term = {"@context": "000_context.jsonld", "id": "creationdate", "type": "directory_date"}
+    (tmp_path / "project" / "version" / "creation_date.json").write_text(json.dumps(project_term))
+    missing = {Term(name="creationdate", collection="version")}
+    report = generate_missing_terms(
+        missing_terms=missing,
+        universe_repo=universe,
+        project_repos=[project_repo],
+        project_name="cmip6plus",
+        universe_type_overrides={"version": "directory_date"},
+    )
+    assert len(report.project_to_create) == 0
+    assert len(report.project_existed) == 1
+
+
 def test_generate_detects_updates(tmp_path):
     existing = {"@context": "000_context.jsonld", "id": "gn", "type": "model", "description": "old"}
     universe = _make_universe(tmp_path, "model", {"gn": existing})

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,23 @@ from repo_watcher.generation.report import (
     TermSkip,
 )
 from repo_watcher.generation.skeleton import build_project_link, build_universe_skeleton
+
+
+def _find_term_file_by_id(directory: Path, term_id: str) -> Path | None:
+    """Search a directory for a JSON file whose ``"id"`` field matches *term_id*.
+
+    Returns the path to the first matching file, or ``None`` if no match is found.
+    """
+    for f in sorted(directory.iterdir()):
+        if f.name == CONTEXT_FILENAME or f.suffix != ".json":
+            continue
+        try:
+            data = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("id") == term_id:
+            return f
+    return None
 
 
 def generate_missing_terms(
@@ -106,6 +124,10 @@ def generate_missing_terms(
 
         # Check universe
         universe_term_file = universe_repo / descriptor / f"{term_id}.json"
+        if not universe_term_file.exists():
+            universe_descriptor_dir = universe_repo / descriptor
+            if universe_descriptor_dir.is_dir():
+                universe_term_file = _find_term_file_by_id(universe_descriptor_dir, term_id) or universe_term_file
         term_update_key = (term.collection, term.name)
         if universe_term_file.exists():
             if update_terms and term_update_key in update_terms:
@@ -169,6 +191,8 @@ def generate_missing_terms(
                 continue
             has_collection_dir = True
             project_term_file = project_collection_dir / f"{term_id}.json"
+            if not project_term_file.exists():
+                project_term_file = _find_term_file_by_id(project_collection_dir, term_id) or project_term_file
             if project_term_file.exists():
                 report.project_existed.append(TermRef(term.collection, term_id))
                 found_in_project = True
@@ -198,6 +222,10 @@ def _handle_term_override(
     # Create universe term if requested and missing
     if override_cfg.get("create_universe"):
         universe_file = universe_repo / descriptor / f"{override_id}.json"
+        if not universe_file.exists():
+            universe_dir = universe_repo / descriptor
+            if universe_dir.is_dir():
+                universe_file = _find_term_file_by_id(universe_dir, override_id) or universe_file
         if universe_file.exists():
             report.universe_existed.append(TermRef(descriptor, override_id))
         else:
@@ -217,7 +245,12 @@ def _handle_term_override(
         override_json.update(override_fields)
     found = False
     for repo in project_repos:
-        override_file = repo / term.collection / f"{override_id}.json"
+        collection_dir = repo / term.collection
+        if not collection_dir.is_dir():
+            continue
+        override_file = collection_dir / f"{override_id}.json"
+        if not override_file.exists():
+            override_file = _find_term_file_by_id(collection_dir, override_id) or override_file
         if override_file.exists():
             report.project_existed.append(TermRef(term.collection, override_id))
             found = True
