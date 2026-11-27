@@ -42,4 +42,6 @@ def merge_check_configs(checks: list[CheckConfig]) -> MergedConfig:
             merged.multi_step_terms.update(chk.multi_step_terms)
         if chk.source_prefill:
             merged.source_prefill.update(chk.source_prefill)
+        if chk.metadata_profile:
+            merged.metadata_profile = chk.metadata_profile
     return merged

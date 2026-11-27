@@ -18,6 +18,7 @@ from repo_watcher.config.loader import merge_check_configs
 from repo_watcher.domain import Term
 from repo_watcher.extraction import extract_term_data
 from repo_watcher.generation.context import detect_collection_mapping
+from repo_watcher.generation.cordex_cmip6 import apply_cordex_cmip6_profile
 from repo_watcher.generation.planner import generate_missing_terms
 from repo_watcher.generation.report import GenerationReport
 from repo_watcher.sources import build_source
@@ -136,7 +137,7 @@ def collect_and_generate(
 
     update_terms = identify_field_updates(all_missing, all_ref_not_source) or None
 
-    if not all_missing and not update_terms:
+    if not all_missing and not update_terms and not merged.metadata_profile:
         return GenerationReport()
 
     # Extract source term data for prefill
@@ -155,7 +156,7 @@ def collect_and_generate(
             for col, terms in data.items():
                 source_term_data.setdefault(col, {}).update(terms)
 
-    return generate_missing_terms(
+    report = generate_missing_terms(
         missing_terms=all_missing,
         universe_repo=universe_repo,
         project_repos=project_repo_paths,
@@ -169,3 +170,14 @@ def collect_and_generate(
         extra_field_values=all_source_field_values or None,
         update_terms=update_terms,
     )
+    if report.universe_to_create or report.universe_to_update:
+        report.changed_by["universe"].add("generic")
+    if report.project_to_create:
+        report.changed_by["project"].add("generic")
+
+    if merged.metadata_profile == "cordex_cmip6":
+        apply_cordex_cmip6_profile(source_check_repos, universe_repo, report)
+    elif merged.metadata_profile:
+        msg = f"Unknown metadata profile: {merged.metadata_profile!r}"
+        raise ValueError(msg)
+    return report

@@ -175,6 +175,10 @@ def generate_missing(
         Optional[Path],
         typer.Option("--write-universe", help="Write universe term files to this local universe repo path."),
     ] = None,
+    summary_file: Annotated[
+        Optional[Path],
+        typer.Option(help="Write a JSON summary (which steps changed which repo, notices) for CI."),
+    ] = None,
 ) -> None:
     """Show what term files would need to be created in universe and project repos."""
     if not universe_repo.is_dir():
@@ -202,6 +206,10 @@ def generate_missing(
         on_progress=typer.echo,
     )
 
+    if summary_file is not None:
+        summary = {repo: sorted(steps) for repo, steps in report.changed_by.items()}
+        summary_file.write_text(json.dumps({**summary, "notices": report.notices}, indent=2) + "\n")
+
     typer.echo()
     if not report.has_work:
         typer.echo(typer.style(report.format_report(), fg=typer.colors.GREEN))
@@ -221,6 +229,11 @@ def generate_missing(
             parts.append(f"{len(report.universe_to_update)} universe file(s) updated in {write_universe.resolve()}")
         if write_project is not None and report.project_to_create:
             parts.append(f"{len(report.project_to_create)} project file(s) created in {write_project.resolve()}")
+        if write_project is not None and report.project_to_update:
+            parts.append(f"{len(report.project_to_update)} project file(s) updated in {write_project.resolve()}")
+        if write_project is not None and report.project_context_to_update:
+            n_contexts = len(report.project_context_to_update)
+            parts.append(f"{n_contexts} project context(s) extended in {write_project.resolve()}")
         if parts:
             typer.echo(f"\nWritten: {', '.join(parts)}. Review the generated skeletons and fill in placeholder values.")
 

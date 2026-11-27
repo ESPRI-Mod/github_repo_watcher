@@ -83,6 +83,8 @@ class CheckConfig:
     multi_step_terms: dict[str, MultiStepConfig] | None = None
     # collection -> {source_field: target_field}
     source_prefill: dict[str, dict[str, str]] | None = None
+    # Project-specific metadata sync run after generation (e.g. "cordex_cmip6")
+    metadata_profile: str | None = None
 
 
 @dataclass
@@ -99,3 +101,4 @@ class MergedConfig:
     term_overrides: dict[str, dict] = field(default_factory=dict)
     multi_step_terms: dict[str, dict] = field(default_factory=dict)
     source_prefill: dict[str, dict[str, str]] = field(default_factory=dict)
+    metadata_profile: str | None = None
