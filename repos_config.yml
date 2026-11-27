@@ -13,6 +13,7 @@ checks:
       type: registry
       project: cordex-cmip6
     project: cordex-cmip6
+    metadata_profile: cordex_cmip6
     skip_collections:
       - driving_variant_label
       - project_id

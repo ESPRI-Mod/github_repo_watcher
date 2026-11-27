@@ -245,6 +245,32 @@ source_prefill:
     release_year: release_year
 ```
 
+### `metadata_profile`
+
+Runs a project-specific metadata sync after the generic generation step. It keeps metadata in sync that the generic term comparison does not cover, such as the exact global attribute strings of a project's conventional CV. Changes are merged field by field into existing project terms and contexts. Universe content is only filled or extended, never removed; cases needing a manual decision are listed as notices in the report. With `--summary-file`, `generate-missing` writes a JSON summary of which step changed which repo, plus the notices. The CI uses it for PR titles and bodies.
+
+Currently only the `cordex_cmip6` profile is available.
+
+```yaml
+metadata_profile: cordex_cmip6
+```
+
+#### `cordex_cmip6`
+
+Reads the conventional CORDEX-CMIP6 CV (the `git` check on `main`) and plans changes for the `esgvoc_dev` project branch and Universe. It follows the same rules as the project's own `_scripts/generate_cc6_cv_additional_collection_entries.py`, so both produce the same project changes.
+
+| Project collection | Field | Rule |
+|--------------------|-------|------|
+| `source_id` | `source`, `source_type`, `license` | Project only |
+| `source_id` | `activity_participation` | Appended to Universe (union across projects, never reduced); in the project only if it differs from Universe |
+| `driving_source_id` | `driving_source` | Project only |
+| `driving_source_id` | `driving_experiment_id` | Project only; omitted when unrestricted |
+| `institution_id` | `institution` | Project only |
+| `domain_id` | `description` | Filled in Universe where empty; in the project only if it differs from Universe |
+| `driving_experiment_id` | `experiment` | Filled in Universe where empty; in the project only if it differs from Universe |
+
+Copies of shared fields already in the project are kept when identical to Universe. When Universe lists activities that CORDEX-CMIP6 does not, a notice asks for a manual check. New context entries are added in alphabetical order.
+
 ## Prefect Deployment
 
 The orchestration layer runs checks as Prefect flows, with results posted to NocoDB.
